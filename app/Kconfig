@@ -440,6 +440,31 @@ config ZMK_GPIO_KEY_WAKEUP_TRIGGER
     default y
     depends on DT_HAS_ZMK_GPIO_KEY_WAKEUP_TRIGGER_ENABLED && ZMK_PM_SOFT_OFF
 
+config ZMK_WATCHDOG
+    bool "Hardware watchdog for hang recovery"
+    select WATCHDOG
+    help
+      Feeds the hardware watchdog from the system workqueue.
+      If the workqueue hangs (e.g. BLE controller deadlock),
+      the feed stops and the WDT triggers an MCU reset.
+
+if ZMK_WATCHDOG
+
+config ZMK_WATCHDOG_TIMEOUT_MS
+    int "Watchdog timeout (ms)"
+    default 10000
+    help
+      MCU resets if the watchdog is not fed within this time.
+
+config ZMK_WATCHDOG_FEED_INTERVAL_MS
+    int "Watchdog feed interval (ms)"
+    default 5000
+    help
+      How often the system workqueue feeds the watchdog.
+      Must be less than the timeout.
+
+endif # ZMK_WATCHDOG
+
 # Power Management
 endmenu
 
