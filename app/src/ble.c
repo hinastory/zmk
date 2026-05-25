@@ -63,11 +63,39 @@ static bool directed_adv_failed = false;
 #define DIR_ADV_TIMEOUT_MS 3000
 static struct k_work_delayable dir_adv_timeout_work;
 
+// Retry advertising when bt_le_adv_start() fails (e.g. resource contention
+// with extended advertising, or a transient controller error).  Without this,
+// a single failure leaves the keyboard invisible until power-cycled.
+#define ADV_RETRY_DELAY_MS 200
+#define ADV_RETRY_MAX 5
+static struct k_work_delayable adv_retry_work;
+static uint8_t adv_retry_count;
+
+static void adv_retry_handler(struct k_work *work) {
+    if (adv_retry_count >= ADV_RETRY_MAX) {
+        LOG_ERR("Advertising retry exhausted (%d attempts)", ADV_RETRY_MAX);
+        adv_retry_count = 0;
+        return;
+    }
+    adv_retry_count++;
+    LOG_WRN("Retrying advertising (attempt %d/%d)", adv_retry_count, ADV_RETRY_MAX);
+    int err = update_advertising();
+    if (err) {
+        k_work_reschedule(&adv_retry_work, K_MSEC(ADV_RETRY_DELAY_MS));
+    } else {
+        adv_retry_count = 0;
+    }
+}
+
 static void dir_adv_timeout_handler(struct k_work *work) {
     if (advertising_status == ZMK_ADV_DIR) {
         LOG_DBG("Directed advertising timed out, falling back to open advertising");
         directed_adv_failed = true;
-        update_advertising();
+        int err = update_advertising();
+        if (err) {
+            adv_retry_count = 0;
+            k_work_reschedule(&adv_retry_work, K_MSEC(ADV_RETRY_DELAY_MS));
+        }
     }
 }
 
@@ -254,7 +282,16 @@ int update_advertising(void) {
     return 0;
 };
 
-static void update_advertising_callback(struct k_work *work) { update_advertising(); }
+static void update_advertising_callback(struct k_work *work) {
+    int err = update_advertising();
+    if (err) {
+        adv_retry_count = 0;
+        k_work_reschedule(&adv_retry_work, K_MSEC(ADV_RETRY_DELAY_MS));
+    } else {
+        adv_retry_count = 0;
+        k_work_cancel_delayable(&adv_retry_work);
+    }
+}
 
 K_WORK_DEFINE(update_advertising_work, update_advertising_callback);
 
@@ -570,6 +607,8 @@ static void connected(struct bt_conn *conn, uint8_t err) {
         return;
     }
     directed_adv_failed = false;
+    adv_retry_count = 0;
+    k_work_cancel_delayable(&adv_retry_work);
 
     LOG_DBG("Connected %s", addr);
 
@@ -791,6 +830,7 @@ static int zmk_ble_init(void) {
     }
 
     k_work_init_delayable(&dir_adv_timeout_work, dir_adv_timeout_handler);
+    k_work_init_delayable(&adv_retry_work, adv_retry_handler);
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     settings_register(&profiles_handler);
