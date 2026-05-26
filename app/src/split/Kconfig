@@ -14,7 +14,8 @@ config ZMK_SPLIT_BLE
     default y
     depends on ZMK_BLE
     select BT_USER_PHY_UPDATE
-    select BT_AUTO_PHY_UPDATE
+    # Keep the split default, but let boards disable host-initiated PHY updates.
+    imply BT_AUTO_PHY_UPDATE
 
 config ZMK_SPLIT_WIRED
     bool "Wired Split"
