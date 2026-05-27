@@ -100,6 +100,11 @@ config ZMK_INPUT_PROCESSOR_BEHAVIORS
     default y
     depends on DT_HAS_ZMK_INPUT_PROCESSOR_BEHAVIORS_ENABLED
 
+config ZMK_INPUT_PROCESSOR_GESTURES
+    bool "Gesture Input Processor"
+    default y
+    depends on DT_HAS_ZMK_INPUT_PROCESSOR_GESTURES_ENABLED
+
 config ZMK_INPUT_SPLIT
     bool "Split input support"
     default y
