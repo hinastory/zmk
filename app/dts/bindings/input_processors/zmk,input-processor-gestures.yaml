@@ -22,6 +22,9 @@ properties:
     type: int
   tap-ms:
     type: int
-  bindings:
-    type: phandle-array
+  layer-id:
+    type: int
+    required: true
+  positions:
+    type: array
     required: true
