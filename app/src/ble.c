@@ -60,7 +60,7 @@ static bool directed_adv_failed = false;
 // Low Duty directed advertising has no built-in timeout in Zephyr (continues forever).
 // Use a delayed work to manually time out and fall back to open advertising so a connection
 // is still possible when the last paired host is offline/asleep.
-#define DIR_ADV_TIMEOUT_MS 3000
+#define DIR_ADV_TIMEOUT_MS 10000
 static struct k_work_delayable dir_adv_timeout_work;
 
 static void dir_adv_timeout_handler(struct k_work *work) {
