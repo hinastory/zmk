@@ -49,3 +49,4 @@ int zmk_combo_get_at(int index, struct zmk_combo_cfg_data *out);
 int zmk_combo_set_at(int index, const struct zmk_combo_cfg_data *cfg);
 int zmk_combo_add(const struct zmk_combo_cfg_data *cfg);
 int zmk_combo_remove(int index);
+int zmk_combo_add_missing_dt_defaults(void);

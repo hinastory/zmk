@@ -688,6 +688,79 @@ int zmk_combo_remove(int index) {
     return 0;
 }
 
+static bool combo_has_same_positions(const struct combo_cfg *combo,
+                                     const struct combo_cfg *default_combo) {
+    if (!combo->active || combo->key_position_len != default_combo->key_position_len) {
+        return false;
+    }
+
+    for (int i = 0; i < default_combo->key_position_len; i++) {
+        bool found = false;
+
+        for (int j = 0; j < combo->key_position_len; j++) {
+            if (combo->key_positions[j] == default_combo->key_positions[i]) {
+                found = true;
+                break;
+            }
+        }
+
+        if (!found) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+int zmk_combo_add_missing_dt_defaults(void) {
+    int added = 0;
+
+    for (int dt_idx = 0; dt_idx < (int)DT_COMBO_COUNT; dt_idx++) {
+        const struct combo_cfg *default_combo = &dt_combos[dt_idx];
+        bool already_present = false;
+
+        for (int slot = 0; slot < MAX_COMBOS; slot++) {
+            if (combo_has_same_positions(&combos[slot], default_combo)) {
+                already_present = true;
+                break;
+            }
+        }
+
+        if (already_present) {
+            continue;
+        }
+
+        if (combo_count >= MAX_COMBOS) {
+            LOG_WRN("No space to add missing DT combo %d", dt_idx);
+            break;
+        }
+
+        int slot = -1;
+        for (int i = 0; i < MAX_COMBOS; i++) {
+            if (!combos[i].active) {
+                slot = i;
+                break;
+            }
+        }
+
+        if (slot < 0) {
+            return added;
+        }
+
+        memcpy(&combos[slot], default_combo, sizeof(struct combo_cfg));
+        combos[slot].active = true;
+        combo_count++;
+        added++;
+    }
+
+    if (added > 0) {
+        rebuild_combo_lookup();
+        LOG_INF("Added %d missing DT combo defaults", added);
+    }
+
+    return added;
+}
+
 static int combo_init(void) {
     for (size_t i = 0; i < CONFIG_ZMK_COMBO_MAX_PRESSED_COMBOS; i++) {
         active_combos[i].combo_idx = UINT16_MAX;

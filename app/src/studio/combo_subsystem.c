@@ -156,6 +156,7 @@ static int apply_stored_combos(void) {
     }
 
     LOG_INF("Applied %d stored combos", stored_combo_count);
+    zmk_combo_add_missing_dt_defaults();
     return 0;
 }
 
