@@ -42,6 +42,7 @@ struct zmk_combo_cfg_data {
     uint32_t param1;
     uint32_t param2;
     bool slow_release;
+    bool from_dt_default;
 };
 
 int zmk_combo_get_count(void);
@@ -50,3 +51,4 @@ int zmk_combo_set_at(int index, const struct zmk_combo_cfg_data *cfg);
 int zmk_combo_add(const struct zmk_combo_cfg_data *cfg);
 int zmk_combo_remove(int index);
 int zmk_combo_add_missing_dt_defaults(void);
+bool zmk_combo_cfg_is_dt_default(const struct zmk_combo_cfg_data *cfg);

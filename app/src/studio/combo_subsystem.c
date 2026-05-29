@@ -122,6 +122,8 @@ static int apply_stored_combos(void) {
         zmk_combo_remove(i);
     }
 
+    int applied_count = 0;
+
     /* Add stored combos */
     for (int i = 0; i < MAX_STORED_COMBOS; i++) {
         if (!stored_combos[i].active) {
@@ -149,13 +151,20 @@ static int apply_stored_combos(void) {
         memcpy(cfg.key_positions, stored_combos[i].key_positions,
                sizeof(int32_t) * stored_combos[i].key_position_len);
 
+        if (zmk_combo_cfg_is_dt_default(&cfg)) {
+            LOG_INF("Skipping stored combo %d: matches DT default", i);
+            continue;
+        }
+
         int ret = zmk_combo_add(&cfg);
         if (ret < 0) {
             LOG_WRN("Failed to restore combo %d: %d", i, ret);
+        } else {
+            applied_count++;
         }
     }
 
-    LOG_INF("Applied %d stored combos", stored_combo_count);
+    LOG_INF("Applied %d stored combos", applied_count);
     zmk_combo_add_missing_dt_defaults();
     return 0;
 }
@@ -168,25 +177,35 @@ static int snapshot_combos_to_storage(void) {
     stored_combo_count = 0;
 
     int count = zmk_combo_get_count();
+    int stored_idx = 0;
     for (int i = 0; i < count && i < MAX_STORED_COMBOS; i++) {
         struct zmk_combo_cfg_data cfg;
         if (zmk_combo_get_at(i, &cfg) < 0) {
             continue;
         }
 
-        memcpy(stored_combos[i].key_positions, cfg.key_positions,
+        if (cfg.from_dt_default || zmk_combo_cfg_is_dt_default(&cfg)) {
+            continue;
+        }
+
+        if (stored_idx >= MAX_STORED_COMBOS) {
+            break;
+        }
+
+        memcpy(stored_combos[stored_idx].key_positions, cfg.key_positions,
                sizeof(int32_t) * cfg.key_position_len);
-        stored_combos[i].key_position_len = cfg.key_position_len;
-        stored_combos[i].require_prior_idle_ms = cfg.require_prior_idle_ms;
-        stored_combos[i].timeout_ms = cfg.timeout_ms;
-        stored_combos[i].layer_mask = cfg.layer_mask;
-        stored_combos[i].behavior_local_id =
+        stored_combos[stored_idx].key_position_len = cfg.key_position_len;
+        stored_combos[stored_idx].require_prior_idle_ms = cfg.require_prior_idle_ms;
+        stored_combos[stored_idx].timeout_ms = cfg.timeout_ms;
+        stored_combos[stored_idx].layer_mask = cfg.layer_mask;
+        stored_combos[stored_idx].behavior_local_id =
             zmk_behavior_get_local_id(cfg.behavior_dev);
-        stored_combos[i].param1 = cfg.param1;
-        stored_combos[i].param2 = cfg.param2;
-        stored_combos[i].slow_release = cfg.slow_release;
-        stored_combos[i].active = true;
+        stored_combos[stored_idx].param1 = cfg.param1;
+        stored_combos[stored_idx].param2 = cfg.param2;
+        stored_combos[stored_idx].slow_release = cfg.slow_release;
+        stored_combos[stored_idx].active = true;
         stored_combo_count++;
+        stored_idx++;
     }
 
     return 0;

@@ -11,6 +11,7 @@
 #include <zephyr/sys/dlist.h>
 #include <zephyr/sys/util.h>
 #include <zephyr/kernel.h>
+#include <string.h>
 
 #include <drivers/behavior.h>
 
@@ -59,6 +60,7 @@ struct combo_cfg {
     struct zmk_behavior_binding behavior;
     bool slow_release;
     bool active; /* whether this slot is in use */
+    bool from_dt_default;
 };
 
 struct active_combo {
@@ -570,6 +572,7 @@ int zmk_combo_get_at(int index, struct zmk_combo_cfg_data *out) {
             out->param1 = combos[i].behavior.param1;
             out->param2 = combos[i].behavior.param2;
             out->slow_release = combos[i].slow_release;
+            out->from_dt_default = combos[i].from_dt_default;
             return 0;
         }
         active_idx++;
@@ -617,6 +620,7 @@ int zmk_combo_set_at(int index, const struct zmk_combo_cfg_data *cfg) {
     combos[slot].behavior.param1 = cfg->param1;
     combos[slot].behavior.param2 = cfg->param2;
     combos[slot].slow_release = cfg->slow_release;
+    combos[slot].from_dt_default = false;
 
     /* Rebuild lookup table */
     rebuild_combo_lookup();
@@ -662,6 +666,7 @@ int zmk_combo_add(const struct zmk_combo_cfg_data *cfg) {
     combos[slot].behavior.param2 = cfg->param2;
     combos[slot].slow_release = cfg->slow_release;
     combos[slot].active = true;
+    combos[slot].from_dt_default = false;
     combo_count++;
 
     /* Rebuild lookup table */
@@ -712,6 +717,50 @@ static bool combo_has_same_positions(const struct combo_cfg *combo,
     return true;
 }
 
+bool zmk_combo_cfg_is_dt_default(const struct zmk_combo_cfg_data *cfg) {
+    if (!cfg || !cfg->behavior_dev || cfg->key_position_len < 2 ||
+        cfg->key_position_len > MAX_COMBO_KEYS) {
+        return false;
+    }
+
+    for (int dt_idx = 0; dt_idx < (int)DT_COMBO_COUNT; dt_idx++) {
+        const struct combo_cfg *default_combo = &dt_combos[dt_idx];
+        struct combo_cfg candidate = {
+            .key_position_len = cfg->key_position_len,
+            .require_prior_idle_ms = cfg->require_prior_idle_ms,
+            .timeout_ms = cfg->timeout_ms,
+            .layer_mask = cfg->layer_mask,
+            .behavior = {
+                .behavior_dev = cfg->behavior_dev,
+                .param1 = cfg->param1,
+                .param2 = cfg->param2,
+            },
+            .slow_release = cfg->slow_release,
+            .active = true,
+        };
+
+        memcpy(candidate.key_positions, cfg->key_positions,
+               sizeof(int32_t) * cfg->key_position_len);
+
+        if (!combo_has_same_positions(&candidate, default_combo)) {
+            continue;
+        }
+        if (candidate.require_prior_idle_ms != default_combo->require_prior_idle_ms ||
+            candidate.timeout_ms != default_combo->timeout_ms ||
+            candidate.layer_mask != default_combo->layer_mask ||
+            candidate.slow_release != default_combo->slow_release ||
+            candidate.behavior.param1 != default_combo->behavior.param1 ||
+            candidate.behavior.param2 != default_combo->behavior.param2 ||
+            strcmp(candidate.behavior.behavior_dev, default_combo->behavior.behavior_dev) != 0) {
+            continue;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
 int zmk_combo_add_missing_dt_defaults(void) {
     int added = 0;
 
@@ -744,11 +793,12 @@ int zmk_combo_add_missing_dt_defaults(void) {
         }
 
         if (slot < 0) {
-            return added;
+            break;
         }
 
         memcpy(&combos[slot], default_combo, sizeof(struct combo_cfg));
         combos[slot].active = true;
+        combos[slot].from_dt_default = true;
         combo_count++;
         added++;
     }
@@ -775,6 +825,7 @@ static int combo_init(void) {
         memcpy(&combos[i], &dt_combos[i], sizeof(struct combo_cfg));
         /* Ensure key_positions beyond DT length are zeroed (already done by memset) */
         combos[i].active = true;
+        combos[i].from_dt_default = true;
         combo_count++;
     }
 
