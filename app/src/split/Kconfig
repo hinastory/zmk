@@ -31,6 +31,12 @@ config ZMK_SPLIT_PERIPHERAL_HID_INDICATORS
     help
       Enable propagating the HID (LED) Indicator state to the split peripheral(s).
 
+config ZMK_SPLIT_PERIPHERAL_LAYER_STATE
+    bool "Peripheral Layer State"
+    help
+      Propagate the active keymap layer index from the central to the split
+      peripheral(s), so a peripheral RGB LED can reflect the current layer.
+
 endif # ZMK_SPLIT
 
 rsource "bluetooth/Kconfig"
