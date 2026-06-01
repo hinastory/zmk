@@ -400,6 +400,26 @@ char *zmk_ble_profile_name(uint8_t index) {
     return profiles[index].name;
 }
 
+int zmk_ble_set_profile_name(uint8_t index, const char *name) {
+    if (index >= ZMK_BLE_PROFILE_COUNT || !name) {
+        return -EINVAL;
+    }
+    if (strlen(name) >= ZMK_BLE_PROFILE_NAME_MAX) {
+        return -EINVAL;
+    }
+
+    strncpy(profiles[index].name, name, ZMK_BLE_PROFILE_NAME_MAX - 1);
+    profiles[index].name[ZMK_BLE_PROFILE_NAME_MAX - 1] = '\0';
+
+    char setting_name[17];
+    sprintf(setting_name, "ble/profiles/%d", index);
+    LOG_DBG("Setting profile name for %s to %s", setting_name, profiles[index].name);
+#if IS_ENABLED(CONFIG_SETTINGS)
+    settings_save_one(setting_name, &profiles[index], sizeof(struct zmk_ble_profile));
+#endif
+    return 0;
+}
+
 int zmk_ble_set_device_name(char *name) {
     // Copy new name to advertising parameters
     int err = bt_set_name(name);

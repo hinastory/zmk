@@ -163,6 +163,19 @@ zmk_studio_Response set_tapping_term(const zmk_studio_Request *req) {
     return CORE_RESPONSE(set_tapping_term, true);
 }
 
+#if IS_ENABLED(CONFIG_ZMK_BLE)
+zmk_studio_Response set_ble_profile_name(const zmk_studio_Request *req) {
+    LOG_DBG("");
+    const zmk_core_SetBleProfileNameRequest *r =
+        &req->subsystem.core.request_type.set_ble_profile_name;
+    if (r->profile_index >= ZMK_BLE_PROFILE_COUNT) {
+        return CORE_RESPONSE(set_ble_profile_name, false);
+    }
+    int err = zmk_ble_set_profile_name((uint8_t)r->profile_index, r->name);
+    return CORE_RESPONSE(set_ble_profile_name, (err == 0));
+}
+#endif /* IS_ENABLED(CONFIG_ZMK_BLE) */
+
 ZMK_RPC_SUBSYSTEM_HANDLER(core, get_device_info, ZMK_STUDIO_RPC_HANDLER_UNSECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(core, get_lock_state, ZMK_STUDIO_RPC_HANDLER_UNSECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(core, reset_settings, ZMK_STUDIO_RPC_HANDLER_SECURED);
@@ -171,6 +184,9 @@ ZMK_RPC_SUBSYSTEM_HANDLER(core, get_ble_profiles, ZMK_STUDIO_RPC_HANDLER_UNSECUR
 #endif
 ZMK_RPC_SUBSYSTEM_HANDLER(core, get_tapping_term, ZMK_STUDIO_RPC_HANDLER_UNSECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(core, set_tapping_term, ZMK_STUDIO_RPC_HANDLER_SECURED);
+#if IS_ENABLED(CONFIG_ZMK_BLE)
+ZMK_RPC_SUBSYSTEM_HANDLER(core, set_ble_profile_name, ZMK_STUDIO_RPC_HANDLER_SECURED);
+#endif
 
 static int core_event_mapper(const zmk_event_t *eh, zmk_studio_Notification *n) {
     struct zmk_studio_core_lock_state_changed *lock_ev = as_zmk_studio_core_lock_state_changed(eh);
