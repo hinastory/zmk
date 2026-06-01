@@ -404,6 +404,9 @@ int zmk_ble_set_profile_name(uint8_t index, const char *name) {
     if (index >= ZMK_BLE_PROFILE_COUNT || !name) {
         return -EINVAL;
     }
+    if (strlen(name) >= ZMK_BLE_PROFILE_NAME_MAX) {
+        return -EINVAL;
+    }
 
     strncpy(profiles[index].name, name, ZMK_BLE_PROFILE_NAME_MAX - 1);
     profiles[index].name[ZMK_BLE_PROFILE_NAME_MAX - 1] = '\0';

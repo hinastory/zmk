@@ -168,6 +168,9 @@ zmk_studio_Response set_ble_profile_name(const zmk_studio_Request *req) {
     LOG_DBG("");
     const zmk_core_SetBleProfileNameRequest *r =
         &req->subsystem.core.request_type.set_ble_profile_name;
+    if (r->profile_index >= ZMK_BLE_PROFILE_COUNT) {
+        return CORE_RESPONSE(set_ble_profile_name, false);
+    }
     int err = zmk_ble_set_profile_name((uint8_t)r->profile_index, r->name);
     return CORE_RESPONSE(set_ble_profile_name, (err == 0));
 }
