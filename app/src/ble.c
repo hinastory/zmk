@@ -212,11 +212,12 @@ int update_advertising(void) {
         // If the peer is unreachable (e.g. out of range or powered off), directed advertising
         // will time out and connected() will set directed_adv_failed, falling back to open
         // advertising so other devices can still connect.
-        if (!directed_adv_failed && !zmk_ble_active_profile_is_open()) {
-            desired_adv = ZMK_ADV_DIR;
-        } else {
-            desired_adv = ZMK_ADV_CONN;
-        }
+        // TEST (macos-open-adv): macOS/iOS ignore directed advertising (Apple BLE
+        // spec restriction), so directed adv wastes DIR_ADV_TIMEOUT before falling
+        // back to open. Advertise open directly so macOS detects us immediately
+        // after power-on. The directed path/flag is kept compiled but unused here.
+        (void)directed_adv_failed;
+        desired_adv = ZMK_ADV_CONN;
     }
     LOG_DBG("advertising from %d to %d", advertising_status, desired_adv);
 
