@@ -61,6 +61,7 @@ struct peripheral_slot {
 #endif // IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_HID_INDICATORS)
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_LAYER_STATE)
     uint16_t update_layer;
+    uint16_t update_layer_color;
 #endif // IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_LAYER_STATE)
     uint16_t selected_physical_layout_handle;
     uint8_t position_state[POSITION_STATE_DATA_LEN];
@@ -224,6 +225,7 @@ int release_peripheral_slot(int index) {
 #endif // IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_HID_INDICATORS)
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_LAYER_STATE)
     slot->update_layer = 0;
+    slot->update_layer_color = 0;
 #endif // IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_LAYER_STATE)
 
     return 0;
@@ -631,6 +633,10 @@ static uint8_t split_central_chrc_discovery_func(struct bt_conn *conn,
                                 BT_UUID_DECLARE_128(ZMK_SPLIT_BT_UPDATE_LAYER_UUID))) {
             LOG_DBG("Found update layer handle");
             slot->update_layer = bt_gatt_attr_value_handle(attr);
+        } else if (!bt_uuid_cmp(((struct bt_gatt_chrc *)attr->user_data)->uuid,
+                                BT_UUID_DECLARE_128(ZMK_SPLIT_BT_UPDATE_LAYER_COLOR_UUID))) {
+            LOG_DBG("Found update layer color handle");
+            slot->update_layer_color = bt_gatt_attr_value_handle(attr);
 #endif // IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_LAYER_STATE)
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING)
         } else if (!bt_uuid_cmp(((struct bt_gatt_chrc *)attr->user_data)->uuid,
@@ -1124,6 +1130,24 @@ void split_central_split_run_callback(struct k_work *work) {
             }
             break;
         }
+        case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_SET_LAYER_COLOR: {
+            if (peripherals[payload_wrapper.source].update_layer_color == 0) {
+                // GATT characteristics may not be discovered yet right after connect.
+                LOG_WRN("NO LAYER COLOR HANDLE TO SET ON PERIPHERAL");
+                break;
+            }
+
+            int err = bt_gatt_write_without_response(
+                peripherals[payload_wrapper.source].conn,
+                peripherals[payload_wrapper.source].update_layer_color,
+                &payload_wrapper.cmd.data.set_layer_color,
+                sizeof(payload_wrapper.cmd.data.set_layer_color), true);
+
+            if (err) {
+                LOG_ERR("Failed to write layer color characteristic (err %d)", err);
+            }
+            break;
+        }
 #endif // IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_LAYER_STATE)
         default:
             LOG_WRN("Unsupported wrapped central command type %d", payload_wrapper.cmd.type);
@@ -1208,6 +1232,7 @@ static int split_central_bt_send_command(uint8_t source,
     switch (cmd.type) {
     case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_SET_HID_INDICATORS:
     case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_SET_LAYER:
+    case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_SET_LAYER_COLOR:
     case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_SET_PHYSICAL_LAYOUT:
     case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_INVOKE_BEHAVIOR: {
         struct central_cmd_wrapper wrapper = {.source = source, .cmd = cmd};

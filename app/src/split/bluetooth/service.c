@@ -132,6 +132,41 @@ static ssize_t split_svc_update_layer(struct bt_conn *conn, const struct bt_gatt
     return len;
 }
 
+// Layer color table sync carries distinct (layer_id, color_idx) pairs for many
+// layers, so a single shared buffer would drop entries. Queue each write and let a
+// work item drain them; storing straight from the BLE RX callback would also block
+// it during the widget listener's flash save.
+struct split_svc_layer_color_item {
+    uint8_t layer_id;
+    uint8_t color_idx;
+};
+
+K_MSGQ_DEFINE(split_svc_layer_color_msgq, sizeof(struct split_svc_layer_color_item), 32, 1);
+
+static void split_svc_update_layer_color_callback(struct k_work *work) {
+    struct split_svc_layer_color_item item;
+    while (k_msgq_get(&split_svc_layer_color_msgq, &item, K_NO_WAIT) == 0) {
+        zmk_split_peripheral_store_layer_color(item.layer_id, item.color_idx);
+    }
+}
+
+static K_WORK_DEFINE(split_svc_update_layer_color_work, split_svc_update_layer_color_callback);
+
+static ssize_t split_svc_update_layer_color(struct bt_conn *conn, const struct bt_gatt_attr *attr,
+                                            const void *buf, uint16_t len, uint16_t offset,
+                                            uint8_t flags) {
+    if (len != sizeof(struct split_svc_layer_color_item)) {
+        return BT_GATT_ERR(BT_ATT_ERR_INVALID_ATTRIBUTE_LEN);
+    }
+
+    const uint8_t *data = buf;
+    struct split_svc_layer_color_item item = {.layer_id = data[0], .color_idx = data[1]};
+    k_msgq_put(&split_svc_layer_color_msgq, &item, K_NO_WAIT);
+    k_work_submit(&split_svc_update_layer_color_work);
+
+    return len;
+}
+
 #endif // IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_LAYER_STATE)
 
 static uint8_t selected_phys_layout = 0;
@@ -236,6 +271,9 @@ BT_GATT_SERVICE_DEFINE(
         BT_GATT_CHARACTERISTIC(BT_UUID_DECLARE_128(ZMK_SPLIT_BT_UPDATE_LAYER_UUID),
                                BT_GATT_CHRC_WRITE_WITHOUT_RESP, BT_GATT_PERM_WRITE_ENCRYPT, NULL,
                                split_svc_update_layer, NULL),
+        BT_GATT_CHARACTERISTIC(BT_UUID_DECLARE_128(ZMK_SPLIT_BT_UPDATE_LAYER_COLOR_UUID),
+                               BT_GATT_CHRC_WRITE_WITHOUT_RESP, BT_GATT_PERM_WRITE_ENCRYPT, NULL,
+                               split_svc_update_layer_color, NULL),
 #endif // IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_LAYER_STATE)
     BT_GATT_CHARACTERISTIC(BT_UUID_DECLARE_128(ZMK_SPLIT_BT_SELECT_PHYS_LAYOUT_UUID),
                            BT_GATT_CHRC_WRITE | BT_GATT_CHRC_READ,

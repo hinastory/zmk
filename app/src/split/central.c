@@ -193,6 +193,43 @@ int zmk_split_central_update_layer(uint8_t layer) {
     return 0;
 }
 
+int zmk_split_central_update_layer_color(uint8_t layer_id, uint8_t color_idx) {
+    if (!active_transport || !active_transport->api ||
+        !active_transport->api->get_available_source_ids || !active_transport->api->send_command) {
+        return -ENODEV;
+    }
+
+    uint8_t source_ids[ZMK_SPLIT_CENTRAL_PERIPHERAL_COUNT];
+
+    int count = active_transport->api->get_available_source_ids(source_ids);
+
+    if (count < 0) {
+        return count;
+    }
+
+    struct zmk_split_transport_central_command command =
+        (struct zmk_split_transport_central_command){
+            .type = ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_SET_LAYER_COLOR,
+            .data =
+                {
+                    .set_layer_color =
+                        {
+                            .layer_id = layer_id,
+                            .color_idx = color_idx,
+                        },
+                },
+        };
+
+    for (size_t i = 0; i < count; i++) {
+        int ret = active_transport->api->send_command(source_ids[i], command);
+        if (ret < 0) {
+            return ret;
+        }
+    }
+
+    return 0;
+}
+
 #endif // IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_LAYER_STATE)
 
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING)

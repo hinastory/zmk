@@ -44,6 +44,7 @@ int zmk_split_central_update_hid_indicator(zmk_hid_indicators_t indicators);
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_LAYER_STATE)
 
 int zmk_split_central_update_layer(uint8_t layer);
+int zmk_split_central_update_layer_color(uint8_t layer_id, uint8_t color_idx);
 
 #endif // IS_ENABLED(CONFIG_ZMK_SPLIT_PERIPHERAL_LAYER_STATE)
 

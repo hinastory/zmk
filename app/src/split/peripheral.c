@@ -74,6 +74,10 @@ int zmk_split_transport_peripheral_command_handler(
     case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_SET_LAYER: {
         return zmk_split_peripheral_store_layer(cmd.data.set_layer.layer);
     }
+    case ZMK_SPLIT_TRANSPORT_CENTRAL_CMD_TYPE_SET_LAYER_COLOR: {
+        return zmk_split_peripheral_store_layer_color(cmd.data.set_layer_color.layer_id,
+                                                      cmd.data.set_layer_color.color_idx);
+    }
 #endif
     default:
         LOG_WRN("Unhandled command type %d", cmd.type);

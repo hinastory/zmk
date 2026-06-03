@@ -13,3 +13,6 @@
 int zmk_split_peripheral_get_layer(uint8_t *layer);
 
 int zmk_split_peripheral_store_layer(uint8_t layer);
+
+// Layer color table entry synchronized from the central to a split peripheral.
+int zmk_split_peripheral_store_layer_color(uint8_t layer_id, uint8_t color_idx);
