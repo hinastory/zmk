@@ -90,6 +90,21 @@ config ZMK_INPUT_PROCESSOR_STUDIO_POINTER_SCALER
     default y
     depends on DT_HAS_ZMK_INPUT_PROCESSOR_STUDIO_POINTER_SCALER_ENABLED
 
+config ZMK_POINTING_SENSOR_CPI_MULTIPLIER_NUM
+    int "Sensor CPI multiplier numerator"
+    default 1
+    help
+      Multiplies the physical sensor CPI applied by the Studio pointing subsystem.
+      The value reported to Studio remains the user-facing CPI.
+
+config ZMK_POINTING_SENSOR_CPI_MULTIPLIER_DEN
+    int "Sensor CPI multiplier denominator"
+    default 1
+    help
+      Divides the physical sensor CPI applied by the Studio pointing subsystem.
+      Use with a matching input-processor scaler to preserve cursor speed while
+      increasing raw sensor resolution.
+
 config ZMK_INPUT_PROCESSOR_CODE_MAPPER
     bool "Code Mapper Input Processor"
     default y
