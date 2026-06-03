@@ -219,14 +219,24 @@ static int aml_settings_save(void) {
                               &aml_persist, sizeof(aml_persist));
 }
 
+static uint32_t normalize_cpi(uint32_t cpi) {
+    if (cpi < PMW3610_MIN_CPI) {
+        cpi = PMW3610_MIN_CPI;
+    }
+    if (cpi > PMW3610_MAX_CPI) {
+        cpi = PMW3610_MAX_CPI;
+    }
+
+    return ((cpi + PMW3610_CPI_STEP / 2) / PMW3610_CPI_STEP) * PMW3610_CPI_STEP;
+}
+
 /*
- * Compute the effective CPI based on cursor sensitivity ratio.
+ * Compute the user-facing CPI based on cursor sensitivity ratio.
  *
  * If an explicit CPI is set (pointing_settings.cpi > 0), use that directly.
- * Otherwise, compute: effective_cpi = DEFAULT_CPI * numerator / denominator
- * Then clamp to [PMW3610_MIN_CPI, PMW3610_MAX_CPI] and round to nearest step.
+ * Otherwise, compute: user_cpi = DEFAULT_CPI * numerator / denominator.
  */
-static uint32_t compute_effective_cpi(void) {
+static uint32_t compute_user_cpi(void) {
     uint32_t cpi;
 
     if (pointing_settings.cpi > 0) {
@@ -241,18 +251,19 @@ static uint32_t compute_effective_cpi(void) {
         cpi = (DEFAULT_CPI * num + den / 2) / den; /* rounded division */
     }
 
-    /* Clamp to valid range */
-    if (cpi < PMW3610_MIN_CPI) {
-        cpi = PMW3610_MIN_CPI;
-    }
-    if (cpi > PMW3610_MAX_CPI) {
-        cpi = PMW3610_MAX_CPI;
+    return normalize_cpi(cpi);
+}
+
+static uint32_t compute_sensor_cpi(uint32_t user_cpi) {
+    uint32_t den = CONFIG_ZMK_POINTING_SENSOR_CPI_MULTIPLIER_DEN;
+    if (den == 0) {
+        den = 1;
     }
 
-    /* Round to nearest step of 200 */
-    cpi = ((cpi + PMW3610_CPI_STEP / 2) / PMW3610_CPI_STEP) * PMW3610_CPI_STEP;
+    uint64_t scaled = (uint64_t)user_cpi * CONFIG_ZMK_POINTING_SENSOR_CPI_MULTIPLIER_NUM;
+    scaled = (scaled + den / 2) / den;
 
-    return cpi;
+    return normalize_cpi((uint32_t)scaled);
 }
 
 /*
@@ -261,14 +272,16 @@ static uint32_t compute_effective_cpi(void) {
  * - Scroll: Updates the global variables read by studio_scroll_scaler.
  */
 static void apply_sensitivity(void) {
-    uint32_t effective_cpi = compute_effective_cpi();
+    uint32_t user_cpi = compute_user_cpi();
+    uint32_t sensor_cpi = compute_sensor_cpi(user_cpi);
 
-    LOG_INF("Applying sensitivity: cursor=%u/%u scroll=%u/%u cpi=%u inv=%u",
+    LOG_INF("Applying sensitivity: cursor=%u/%u scroll=%u/%u cpi=%u sensor_cpi=%u inv=%u",
             pointing_settings.cursor_numerator,
             pointing_settings.cursor_denominator,
             pointing_settings.scroll_numerator,
             pointing_settings.scroll_denominator,
-            effective_cpi,
+            user_cpi,
+            sensor_cpi,
             pointing_settings.scroll_inverted);
 
     /* Update scroll globals for the studio_scaler input processor */
@@ -292,16 +305,16 @@ static void apply_sensitivity(void) {
     }
 
     struct sensor_value val = {
-        .val1 = (int32_t)effective_cpi,
+        .val1 = (int32_t)sensor_cpi,
         .val2 = 0,
     };
 
     int err = sensor_attr_set(trackball_dev, SENSOR_CHAN_ALL,
                                (enum sensor_attribute)PMW3610_ALT_ATTR_CPI, &val);
     if (err) {
-        LOG_ERR("Failed to set CPI to %u: %d", effective_cpi, err);
+        LOG_ERR("Failed to set sensor CPI to %u: %d", sensor_cpi, err);
     } else {
-        LOG_INF("CPI set to %u successfully", effective_cpi);
+        LOG_INF("Sensor CPI set to %u successfully", sensor_cpi);
     }
 #else
     LOG_WRN("No trackball device available, CPI change not applied");
@@ -392,7 +405,7 @@ zmk_studio_Response get_sensitivity(const zmk_studio_Request *req) {
         resp.scroll.denominator = 1;
     }
 
-    resp.cpi = compute_effective_cpi();
+    resp.cpi = compute_user_cpi();
 
     LOG_INF("get_sensitivity: cursor=%u/%u scroll=%d/%u cpi=%u inv=%u",
             resp.cursor.numerator, resp.cursor.denominator,
@@ -475,8 +488,8 @@ zmk_studio_Response set_sensitivity(const zmk_studio_Request *req) {
     resp.which_result = zmk_pointing_SetSensitivityResponse_ok_tag;
     resp.result.ok = true;
 
-    LOG_INF("set_sensitivity: success, effective CPI=%u scroll=%u/%u inv=%u",
-            compute_effective_cpi(),
+    LOG_INF("set_sensitivity: success, user CPI=%u scroll=%u/%u inv=%u",
+            compute_user_cpi(),
             pointing_settings.scroll_numerator,
             pointing_settings.scroll_denominator,
             pointing_settings.scroll_inverted);
