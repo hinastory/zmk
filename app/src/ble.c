@@ -214,6 +214,12 @@ int update_advertising(void) {
         // The directed-advertising path/flag is kept compiled but unused here.
         (void)directed_adv_failed;
         desired_adv = ZMK_ADV_CONN;
+    } else {
+        // PROBE (throwaway test build): keep connectable advertising up even while the
+        // active profile is connected, so the SAME host's Web Bluetooth picker can
+        // discover this keyboard for ZMK Studio without switching BT profiles. Used only
+        // to validate that macOS surfaces an advertising-while-connected peripheral.
+        desired_adv = ZMK_ADV_CONN;
     }
     LOG_DBG("advertising from %d to %d", advertising_status, desired_adv);
 
