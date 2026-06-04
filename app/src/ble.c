@@ -36,6 +36,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #include <zmk/split/bluetooth/uuid.h>
 #include <zmk/event_manager.h>
 #include <zmk/events/ble_active_profile_changed.h>
+#include <zmk/events/ble_advertising_state_changed.h>
 
 #if IS_ENABLED(CONFIG_ZMK_BLE_PASSKEY_ENTRY)
 #include <zmk/events/keycode_state_changed.h>
@@ -52,6 +53,8 @@ enum advertising_type {
     ZMK_ADV_DIR,
     ZMK_ADV_CONN,
 } advertising_status;
+
+static enum advertising_type last_raised_advertising_status;
 
 // When directed advertising fails (peer not reachable), fall back to open advertising.
 // Reset on successful connection or profile switch so the next power-on retries directed first.
@@ -111,6 +114,16 @@ static bt_addr_le_t peripheral_addrs[ZMK_SPLIT_BLE_PERIPHERAL_COUNT];
 static void raise_profile_changed_event(void) {
     raise_zmk_ble_active_profile_changed((struct zmk_ble_active_profile_changed){
         .index = active_profile, .profile = &profiles[active_profile]});
+}
+
+static void raise_advertising_state_changed_event(void) {
+    if (last_raised_advertising_status == advertising_status) {
+        return;
+    }
+
+    last_raised_advertising_status = advertising_status;
+    raise_zmk_ble_advertising_state_changed((struct zmk_ble_advertising_state_changed){
+        .state = advertising_status});
 }
 
 static void raise_profile_changed_event_callback(struct k_work *work) {
@@ -247,6 +260,8 @@ int update_advertising(void) {
     } else {
         k_work_cancel_delayable(&dir_adv_timeout_work);
     }
+
+    raise_advertising_state_changed_event();
 
     return 0;
 };
