@@ -139,6 +139,9 @@ static bool is_enabled;
 static struct peripheral_slot peripherals[ZMK_SPLIT_BLE_PERIPHERAL_COUNT];
 
 static bool is_scanning = false;
+static int64_t scan_not_before;
+static void start_scanning_work_cb(struct k_work *work);
+static K_WORK_DELAYABLE_DEFINE(start_scanning_work, start_scanning_work_cb);
 
 static const struct bt_uuid_128 split_service_uuid = BT_UUID_INIT_128(ZMK_SPLIT_BT_SERVICE_UUID);
 
@@ -801,6 +804,10 @@ static void split_central_process_connection(struct bt_conn *conn) {
 
 static int stop_scanning(void) {
     LOG_DBG("Stopping peripheral scanning");
+    if (!is_scanning) {
+        return 0;
+    }
+
     is_scanning = false;
 
     int err = bt_le_scan_stop();
@@ -906,6 +913,16 @@ static int start_scanning(void) {
         return 0;
     }
 
+    if (CONFIG_ZMK_SPLIT_BLE_CENTRAL_START_SCAN_DELAY_MS > 0 && scan_not_before > 0) {
+        int64_t now = k_uptime_get();
+        if (now < scan_not_before) {
+            int64_t delay_ms = scan_not_before - now;
+            LOG_DBG("Delaying peripheral scanning for %lld ms", (long long)delay_ms);
+            k_work_reschedule(&start_scanning_work, K_MSEC(delay_ms));
+            return 0;
+        }
+    }
+
     // No action is necessary if central is already scanning.
     if (is_scanning) {
         LOG_DBG("Scanning already running");
@@ -936,6 +953,8 @@ static int start_scanning(void) {
     LOG_DBG("Scanning successfully started");
     return 0;
 }
+
+static void start_scanning_work_cb(struct k_work *work) { start_scanning(); }
 
 static void split_central_connected(struct bt_conn *conn, uint8_t conn_err) {
     char addr[BT_ADDR_LE_STR_LEN];
@@ -1198,6 +1217,8 @@ static struct settings_handler ble_central_settings_handler = {
 #endif // IS_ENABLED(CONFIG_SETTINGS)
 
 static int zmk_split_bt_central_init(void) {
+    scan_not_before = 0;
+
     k_work_queue_start(&split_central_split_run_q, split_central_split_run_q_stack,
                        K_THREAD_STACK_SIZEOF(split_central_split_run_q_stack),
                        CONFIG_ZMK_BLE_THREAD_PRIORITY, NULL);
@@ -1263,8 +1284,13 @@ static int split_central_bt_get_available_source_ids(uint8_t *sources) {
 static int split_central_bt_set_enabled(bool enabled) {
     is_enabled = enabled;
     if (enabled) {
+        if (CONFIG_ZMK_SPLIT_BLE_CENTRAL_START_SCAN_DELAY_MS > 0 && scan_not_before == 0) {
+            scan_not_before =
+                k_uptime_get() + CONFIG_ZMK_SPLIT_BLE_CENTRAL_START_SCAN_DELAY_MS;
+        }
         return start_scanning();
     } else {
+        k_work_cancel_delayable(&start_scanning_work);
         int err = stop_scanning();
         if (err < 0) {
             LOG_WRN("Failed to stop scanning for peripherals (%d)", err);

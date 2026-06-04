@@ -74,6 +74,14 @@ config ZMK_SPLIT_BLE_PREF_TIMEOUT
     int "Supervision timeout to use for split central/peripheral connection"
     default 400
 
+config ZMK_SPLIT_BLE_CENTRAL_START_SCAN_DELAY_MS
+    int "Delay before split central starts BLE scanning on startup"
+    default 0
+    help
+      Delay the first BLE scan for split peripherals after the central transport
+      is enabled. This can give host reconnection advertising a short clean
+      window when only the central half is powered on.
+
 endif # ZMK_SPLIT_ROLE_CENTRAL
 
 if !ZMK_SPLIT_ROLE_CENTRAL
