@@ -439,7 +439,8 @@ int zmk_ble_prof_select(uint8_t index) {
         disconnecting_non_active_profiles = disconnect_non_active_profiles();
     }
 
-    if (!disconnecting_non_active_profiles || active_profile_connected) {
+    if (!disconnecting_non_active_profiles || active_profile_connected ||
+        IS_ENABLED(CONFIG_ZMK_BLE_RESTART_ADV_DURING_PROFILE_HANDOFF)) {
         update_advertising();
     }
 
@@ -736,7 +737,7 @@ static void connected(struct bt_conn *conn, uint8_t err) {
         int disconnect_err = bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
         LOG_DBG("Rejecting non-active profile %d during profile-select handoff: %d",
                 profile_index, disconnect_err);
-        if (disconnect_err) {
+        if (disconnect_err || IS_ENABLED(CONFIG_ZMK_BLE_RESTART_ADV_DURING_PROFILE_HANDOFF)) {
             update_advertising();
         }
         return;
@@ -747,7 +748,7 @@ static void connected(struct bt_conn *conn, uint8_t err) {
         int disconnect_err = bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
         LOG_DBG("Rejecting non-active profile %d during startup priority: %d", profile_index,
                 disconnect_err);
-        if (disconnect_err) {
+        if (disconnect_err || IS_ENABLED(CONFIG_ZMK_BLE_RESTART_ADV_DURING_PROFILE_HANDOFF)) {
             update_advertising();
         }
         return;
