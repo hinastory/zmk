@@ -79,6 +79,7 @@ static void dir_adv_timeout_handler(struct k_work *work) {
 
 static struct zmk_ble_profile profiles[ZMK_BLE_PROFILE_COUNT];
 static uint8_t active_profile;
+static bool profile_select_handoff_active = false;
 
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
@@ -316,25 +317,38 @@ static int ble_save_profile(void) {
 #endif
 }
 
+static bool disconnect_non_active_profiles(void);
+
 int zmk_ble_prof_select(uint8_t index) {
     if (index >= ZMK_BLE_PROFILE_COUNT) {
         return -ERANGE;
     }
 
     LOG_DBG("profile %d", index);
-    if (active_profile == index) {
-        return 0;
+    bool active_profile_changed = active_profile != index;
+    if (active_profile_changed) {
+        active_profile = index;
+        ble_save_profile();
+
+        // Reset fallback flag so directed advertising is retried for the new profile.
+        directed_adv_failed = false;
     }
 
-    active_profile = index;
-    ble_save_profile();
+    bool active_profile_connected = false;
+    bool disconnecting_non_active_profiles = false;
+    if (IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT)) {
+        active_profile_connected = zmk_ble_active_profile_is_connected();
+        profile_select_handoff_active = !active_profile_connected;
+        disconnecting_non_active_profiles = disconnect_non_active_profiles();
+    }
 
-    // Reset fallback flag so directed advertising is retried for the new profile.
-    directed_adv_failed = false;
+    if (!disconnecting_non_active_profiles || active_profile_connected) {
+        update_advertising();
+    }
 
-    update_advertising();
-
-    raise_profile_changed_event();
+    if (active_profile_changed) {
+        raise_profile_changed_event();
+    }
 
     return 0;
 };
@@ -369,6 +383,36 @@ int zmk_ble_prof_disconnect(uint8_t index) {
 
     bt_conn_unref(conn);
     return result;
+}
+
+static bool disconnect_non_active_profiles(void) {
+    bool disconnect_requested = false;
+
+    for (uint8_t i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
+        if (i == active_profile) {
+            continue;
+        }
+
+        bt_addr_le_t *addr = &profiles[i].peer;
+        if (!bt_addr_le_cmp(addr, BT_ADDR_LE_ANY)) {
+            continue;
+        }
+
+        struct bt_conn *conn = bt_conn_lookup_addr_le(BT_ID_DEFAULT, addr);
+        if (conn == NULL) {
+            continue;
+        }
+
+        int err = bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        LOG_DBG("Disconnecting non-active profile %d: %d", i, err);
+        if (err == 0) {
+            disconnect_requested = true;
+        }
+
+        bt_conn_unref(conn);
+    }
+
+    return disconnect_requested;
 }
 
 bt_addr_le_t *zmk_ble_active_profile_addr(void) { return &profiles[active_profile].peer; }
@@ -589,6 +633,17 @@ static void connected(struct bt_conn *conn, uint8_t err) {
     directed_adv_failed = false;
 
     int profile_index = zmk_ble_profile_index(bt_conn_get_dst(conn));
+    if (IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT) &&
+        profile_select_handoff_active && profile_index >= 0 && profile_index != active_profile) {
+        int disconnect_err = bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        LOG_DBG("Rejecting non-active profile %d during profile-select handoff: %d",
+                profile_index, disconnect_err);
+        if (disconnect_err) {
+            update_advertising();
+        }
+        return;
+    }
+
     bool active_profile_changed = false;
     if (profile_index >= 0 && profile_index != active_profile) {
         LOG_DBG("Switching active profile from %d to connected profile %d", active_profile,
@@ -597,6 +652,9 @@ static void connected(struct bt_conn *conn, uint8_t err) {
         ble_save_profile();
         directed_adv_failed = false;
         active_profile_changed = true;
+    }
+    if (profile_index == active_profile) {
+        profile_select_handoff_active = false;
     }
 
     LOG_DBG("Connected %s", addr);
@@ -743,6 +801,7 @@ static void auth_pairing_complete(struct bt_conn *conn, bool bonded) {
     }
 
     set_profile_address(active_profile, dst);
+    profile_select_handoff_active = false;
     update_advertising();
 };
 

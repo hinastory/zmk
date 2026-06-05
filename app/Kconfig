@@ -221,6 +221,13 @@ config ZMK_BLE_MOUSE_REPORT_QUEUE_SIZE
 config ZMK_BLE_CLEAR_BONDS_ON_START
     bool "Configuration that clears all bond information from the keyboard on startup."
 
+config ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT
+    bool "Disconnect other BLE host profiles when selecting a profile"
+    help
+      Disconnects connected host profiles other than the newly selected active
+      profile when the user switches BLE profiles. This makes a manual BT_SEL
+      behave like a hard handoff to the selected host.
+
 # HID GATT notifications sent this way are *not* picked up by Linux, and possibly others.
 config BT_GATT_NOTIFY_MULTIPLE
     default n
