@@ -37,6 +37,7 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #include <zmk/event_manager.h>
 #include <zmk/events/ble_active_profile_changed.h>
 #include <zmk/events/ble_advertising_state_changed.h>
+#include <zmk/events/ble_connection_state_changed.h>
 
 #if IS_ENABLED(CONFIG_ZMK_BLE_PASSKEY_ENTRY)
 #include <zmk/events/keycode_state_changed.h>
@@ -124,6 +125,11 @@ static void raise_advertising_state_changed_event(void) {
     last_raised_advertising_status = advertising_status;
     raise_zmk_ble_advertising_state_changed((struct zmk_ble_advertising_state_changed){
         .state = advertising_status});
+}
+
+static void raise_connection_state_changed_event(const struct bt_conn *conn, bool connected) {
+    raise_zmk_ble_connection_state_changed((struct zmk_ble_connection_state_changed){
+        .connected = connected, .profile_index = zmk_ble_profile_index(bt_conn_get_dst(conn))});
 }
 
 static void raise_profile_changed_event_callback(struct k_work *work) {
@@ -604,6 +610,7 @@ static void connected(struct bt_conn *conn, uint8_t err) {
     directed_adv_failed = false;
 
     LOG_DBG("Connected %s", addr);
+    raise_connection_state_changed_event(conn, true);
 
     update_advertising();
 
@@ -627,6 +634,8 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
         LOG_DBG("SKIPPING FOR ROLE %d", info.role);
         return;
     }
+
+    raise_connection_state_changed_event(conn, false);
 
     // We need to do this in a work callback, otherwise the advertising update will still see the
     // connection for a profile as active, and not start advertising yet.
