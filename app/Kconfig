@@ -229,11 +229,17 @@ config ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT
       behave like a hard handoff to the selected host.
 
 config ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT
-    bool "Immediately save the active BLE profile when it connects"
+    bool "Save the active BLE profile after it connects"
     help
-      Saves the connected active host profile without the normal settings
-      debounce. This lets the next boot prefer the host that was actually
-      connected before power-off.
+      Saves the connected active host profile outside the connection callback
+      instead of using the normal settings debounce. This lets the next boot
+      prefer the host that was actually connected before power-off without
+      blocking the connection callback.
+
+config ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT_DELAY_MS
+    int "Connected active profile save delay in milliseconds"
+    depends on ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT
+    default 0
 
 config ZMK_BLE_STARTUP_PROFILE_PRIORITY
     bool "Prioritize the saved active BLE host profile during startup"

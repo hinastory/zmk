@@ -336,34 +336,68 @@ bt_addr_le_t *zmk_ble_profile_address(uint8_t index) {
 }
 
 #if IS_ENABLED(CONFIG_SETTINGS)
+static uint8_t saved_active_profile;
+
+static int ble_save_active_profile_index(uint8_t index) {
+    int err = settings_save_one("ble/active_profile", &index, sizeof(index));
+    if (err) {
+        return err;
+    }
+
+    saved_active_profile = index;
+    return 0;
+}
+
 static void ble_save_profile_work(struct k_work *work) {
-    settings_save_one("ble/active_profile", &active_profile, sizeof(active_profile));
+    if (saved_active_profile == active_profile) {
+        return;
+    }
+
+    ble_save_active_profile_index(active_profile);
 }
 
 static struct k_work_delayable ble_save_work;
+
+#if IS_ENABLED(CONFIG_ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT)
+static uint8_t pending_connected_profile_save;
+
+static void ble_save_connected_profile_work(struct k_work *work) {
+    if (pending_connected_profile_save != active_profile ||
+        saved_active_profile == pending_connected_profile_save) {
+        return;
+    }
+
+    ble_save_active_profile_index(pending_connected_profile_save);
+}
+
+static struct k_work_delayable ble_save_connected_work;
+#endif
 #endif
 
 static int ble_save_profile(void) {
 #if IS_ENABLED(CONFIG_SETTINGS)
+    if (saved_active_profile == active_profile) {
+        k_work_cancel_delayable(&ble_save_work);
+        return 0;
+    }
+
     return k_work_reschedule(&ble_save_work, K_MSEC(CONFIG_ZMK_SETTINGS_SAVE_DEBOUNCE));
 #else
     return 0;
 #endif
 }
 
-static int ble_save_profile_immediate(void) {
-#if IS_ENABLED(CONFIG_SETTINGS)
-    k_work_cancel_delayable(&ble_save_work);
-    return settings_save_one("ble/active_profile", &active_profile, sizeof(active_profile));
-#else
-    return 0;
-#endif
-}
-
 static int ble_save_connected_profile(void) {
-    if (IS_ENABLED(CONFIG_ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT)) {
-        return ble_save_profile_immediate();
+#if IS_ENABLED(CONFIG_SETTINGS) && IS_ENABLED(CONFIG_ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT)
+    if (saved_active_profile == active_profile) {
+        return 0;
     }
+
+    k_work_cancel_delayable(&ble_save_work);
+    pending_connected_profile_save = active_profile;
+    return k_work_reschedule(&ble_save_connected_work,
+                             K_MSEC(CONFIG_ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT_DELAY_MS));
+#endif
 
     return ble_save_profile();
 }
@@ -632,6 +666,7 @@ static int ble_profiles_handle_set(const char *name, size_t len, settings_read_c
             LOG_ERR("Failed to handle active profile from settings (err %d)", err);
             return err;
         }
+        saved_active_profile = active_profile;
     }
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE) && IS_ENABLED(CONFIG_ZMK_SPLIT_ROLE_CENTRAL)
     else if (settings_name_steq(name, "peripheral_addresses", &next) && next) {
@@ -968,6 +1003,9 @@ static int zmk_ble_init(void) {
 #if IS_ENABLED(CONFIG_SETTINGS)
     settings_register(&profiles_handler);
     k_work_init_delayable(&ble_save_work, ble_save_profile_work);
+#if IS_ENABLED(CONFIG_ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT)
+    k_work_init_delayable(&ble_save_connected_work, ble_save_connected_profile_work);
+#endif
 #else
     zmk_ble_complete_startup();
 #endif
