@@ -81,6 +81,11 @@ static struct zmk_ble_profile profiles[ZMK_BLE_PROFILE_COUNT];
 static uint8_t active_profile;
 static bool profile_select_handoff_active = false;
 
+#if IS_ENABLED(CONFIG_ZMK_BLE_STARTUP_PROFILE_PRIORITY)
+static bool startup_profile_priority_active = false;
+static struct k_work_delayable startup_profile_priority_timeout_work;
+#endif
+
 #define DEVICE_NAME CONFIG_BT_DEVICE_NAME
 #define DEVICE_NAME_LEN (sizeof(DEVICE_NAME) - 1)
 
@@ -167,6 +172,35 @@ bool zmk_ble_profile_is_connected(uint8_t index) {
 
     return info.state == BT_CONN_STATE_CONNECTED;
 }
+
+#if IS_ENABLED(CONFIG_ZMK_BLE_STARTUP_PROFILE_PRIORITY)
+static void stop_startup_profile_priority(void) {
+    startup_profile_priority_active = false;
+    k_work_cancel_delayable(&startup_profile_priority_timeout_work);
+}
+
+static void startup_profile_priority_timeout_handler(struct k_work *work) {
+    if (startup_profile_priority_active) {
+        LOG_DBG("Startup active profile priority timed out");
+        startup_profile_priority_active = false;
+    }
+}
+
+static void start_startup_profile_priority(void) {
+    if (zmk_ble_active_profile_is_open() || zmk_ble_active_profile_is_connected()) {
+        return;
+    }
+
+    LOG_DBG("Prioritizing active profile %d for %d ms", active_profile,
+            CONFIG_ZMK_BLE_STARTUP_PROFILE_PRIORITY_TIMEOUT_MS);
+    startup_profile_priority_active = true;
+    k_work_reschedule(&startup_profile_priority_timeout_work,
+                      K_MSEC(CONFIG_ZMK_BLE_STARTUP_PROFILE_PRIORITY_TIMEOUT_MS));
+}
+#else
+static void stop_startup_profile_priority(void) {}
+static void start_startup_profile_priority(void) {}
+#endif
 
 #define CHECKED_ADV_STOP()                                                                         \
     err = bt_le_adv_stop();                                                                        \
@@ -317,6 +351,23 @@ static int ble_save_profile(void) {
 #endif
 }
 
+static int ble_save_profile_immediate(void) {
+#if IS_ENABLED(CONFIG_SETTINGS)
+    k_work_cancel_delayable(&ble_save_work);
+    return settings_save_one("ble/active_profile", &active_profile, sizeof(active_profile));
+#else
+    return 0;
+#endif
+}
+
+static int ble_save_connected_profile(void) {
+    if (IS_ENABLED(CONFIG_ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT)) {
+        return ble_save_profile_immediate();
+    }
+
+    return ble_save_profile();
+}
+
 static bool disconnect_non_active_profiles(void);
 
 int zmk_ble_prof_select(uint8_t index) {
@@ -328,7 +379,7 @@ int zmk_ble_prof_select(uint8_t index) {
     bool active_profile_changed = active_profile != index;
     if (active_profile_changed) {
         active_profile = index;
-        ble_save_profile();
+        stop_startup_profile_priority();
 
         // Reset fallback flag so directed advertising is retried for the new profile.
         directed_adv_failed = false;
@@ -336,8 +387,20 @@ int zmk_ble_prof_select(uint8_t index) {
 
     bool active_profile_connected = false;
     bool disconnecting_non_active_profiles = false;
-    if (IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT)) {
+    if (IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT) ||
+        IS_ENABLED(CONFIG_ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT)) {
         active_profile_connected = zmk_ble_active_profile_is_connected();
+    }
+
+    if (active_profile_changed) {
+        if (active_profile_connected) {
+            ble_save_connected_profile();
+        } else {
+            ble_save_profile();
+        }
+    }
+
+    if (IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT)) {
         profile_select_handoff_active = !active_profile_connected;
         disconnecting_non_active_profiles = disconnect_non_active_profiles();
     }
@@ -644,16 +707,32 @@ static void connected(struct bt_conn *conn, uint8_t err) {
         return;
     }
 
+#if IS_ENABLED(CONFIG_ZMK_BLE_STARTUP_PROFILE_PRIORITY)
+    if (startup_profile_priority_active && profile_index >= 0 && profile_index != active_profile) {
+        int disconnect_err = bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+        LOG_DBG("Rejecting non-active profile %d during startup priority: %d", profile_index,
+                disconnect_err);
+        if (disconnect_err) {
+            update_advertising();
+        }
+        return;
+    }
+#endif
+
     bool active_profile_changed = false;
     if (profile_index >= 0 && profile_index != active_profile) {
         LOG_DBG("Switching active profile from %d to connected profile %d", active_profile,
                 profile_index);
         active_profile = profile_index;
-        ble_save_profile();
+        ble_save_connected_profile();
         directed_adv_failed = false;
         active_profile_changed = true;
     }
     if (profile_index == active_profile) {
+        if (!active_profile_changed && IS_ENABLED(CONFIG_ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT)) {
+            ble_save_connected_profile();
+        }
+        stop_startup_profile_priority();
         profile_select_handoff_active = false;
     }
 
@@ -801,6 +880,8 @@ static void auth_pairing_complete(struct bt_conn *conn, bool bonded) {
     }
 
     set_profile_address(active_profile, dst);
+    ble_save_connected_profile();
+    stop_startup_profile_priority();
     profile_select_handoff_active = false;
     update_advertising();
 };
@@ -864,6 +945,7 @@ static int zmk_ble_complete_startup(void) {
     bt_conn_auth_cb_register(&zmk_ble_auth_cb_display);
     bt_conn_auth_info_cb_register(&zmk_ble_auth_info_cb_display);
 
+    start_startup_profile_priority();
     zmk_ble_ready(0);
 
     return 0;
@@ -878,6 +960,10 @@ static int zmk_ble_init(void) {
     }
 
     k_work_init_delayable(&dir_adv_timeout_work, dir_adv_timeout_handler);
+#if IS_ENABLED(CONFIG_ZMK_BLE_STARTUP_PROFILE_PRIORITY)
+    k_work_init_delayable(&startup_profile_priority_timeout_work,
+                          startup_profile_priority_timeout_handler);
+#endif
 
 #if IS_ENABLED(CONFIG_SETTINGS)
     settings_register(&profiles_handler);

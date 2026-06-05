@@ -228,6 +228,26 @@ config ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT
       profile when the user switches BLE profiles. This makes a manual BT_SEL
       behave like a hard handoff to the selected host.
 
+config ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT
+    bool "Immediately save the active BLE profile when it connects"
+    help
+      Saves the connected active host profile without the normal settings
+      debounce. This lets the next boot prefer the host that was actually
+      connected before power-off.
+
+config ZMK_BLE_STARTUP_PROFILE_PRIORITY
+    bool "Prioritize the saved active BLE host profile during startup"
+    help
+      Temporarily rejects bonded host connections for profiles other than the
+      saved active profile immediately after boot. This gives the last active
+      host a chance to reconnect first while still falling back to other hosts
+      after the timeout.
+
+config ZMK_BLE_STARTUP_PROFILE_PRIORITY_TIMEOUT_MS
+    int "Startup active profile priority timeout in milliseconds"
+    depends on ZMK_BLE_STARTUP_PROFILE_PRIORITY
+    default 3000
+
 # HID GATT notifications sent this way are *not* picked up by Linux, and possibly others.
 config BT_GATT_NOTIFY_MULTIPLE
     default n
