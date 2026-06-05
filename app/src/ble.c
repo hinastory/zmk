@@ -588,11 +588,22 @@ static void connected(struct bt_conn *conn, uint8_t err) {
     }
     directed_adv_failed = false;
 
+    int profile_index = zmk_ble_profile_index(bt_conn_get_dst(conn));
+    bool active_profile_changed = false;
+    if (profile_index >= 0 && profile_index != active_profile) {
+        LOG_DBG("Switching active profile from %d to connected profile %d", active_profile,
+                profile_index);
+        active_profile = profile_index;
+        ble_save_profile();
+        directed_adv_failed = false;
+        active_profile_changed = true;
+    }
+
     LOG_DBG("Connected %s", addr);
 
     update_advertising();
 
-    if (is_conn_active_profile(conn)) {
+    if (active_profile_changed || is_conn_active_profile(conn)) {
         LOG_DBG("Active profile connected");
         k_work_submit(&raise_profile_changed_event_work);
     }
