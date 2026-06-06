@@ -402,29 +402,61 @@ static int ble_save_connected_profile(void) {
     return ble_save_profile();
 }
 
-static void update_active_profile_conn_params(void) {
-    if (!IS_ENABLED(CONFIG_ZMK_BLE_UPDATE_CONN_PARAMS_ON_PROFILE_SELECT)) {
-        return;
-    }
-
-    bt_addr_le_t *addr = &profiles[active_profile].peer;
+static void request_profile_conn_params(uint8_t index, const struct bt_le_conn_param *param) {
+    bt_addr_le_t *addr = &profiles[index].peer;
     if (!bt_addr_le_cmp(addr, BT_ADDR_LE_ANY)) {
         return;
     }
 
+    // Look up by the profile's host address so the split (central) link is never
+    // matched, then guard on the peripheral role as a second safety net.
     struct bt_conn *conn = bt_conn_lookup_addr_le(BT_ID_DEFAULT, addr);
     if (conn == NULL) {
         return;
     }
 
-    int err = bt_conn_le_param_update(
-        conn, BT_LE_CONN_PARAM(CONFIG_BT_PERIPHERAL_PREF_MIN_INT,
-                               CONFIG_BT_PERIPHERAL_PREF_MAX_INT,
-                               CONFIG_BT_PERIPHERAL_PREF_LATENCY,
-                               CONFIG_BT_PERIPHERAL_PREF_TIMEOUT));
-    LOG_DBG("Requested active profile connection parameter update: %d", err);
+    struct bt_conn_info info;
+    if (bt_conn_get_info(conn, &info) == 0 && info.role == BT_CONN_ROLE_PERIPHERAL &&
+        info.le.interval >= param->interval_min && info.le.interval <= param->interval_max &&
+        info.le.latency == param->latency && info.le.timeout == param->timeout) {
+        // Already at the target params — skip to avoid redundant LL procedures
+        // (and -EBUSY storms when BT_SEL is mashed).
+        bt_conn_unref(conn);
+        return;
+    }
+
+    int err = bt_conn_le_param_update(conn, param);
+    LOG_DBG("Requested conn param update for profile %d: %d", index, err);
 
     bt_conn_unref(conn);
+}
+
+static void rebalance_conn_params(void) {
+    if (!IS_ENABLED(CONFIG_ZMK_BLE_UPDATE_CONN_PARAMS_ON_PROFILE_SELECT)) {
+        return;
+    }
+
+    // Active profile: tighten to the low-latency preferred params for smooth HID.
+    request_profile_conn_params(active_profile,
+                                BT_LE_CONN_PARAM(CONFIG_BT_PERIPHERAL_PREF_MIN_INT,
+                                                 CONFIG_BT_PERIPHERAL_PREF_MAX_INT,
+                                                 CONFIG_BT_PERIPHERAL_PREF_LATENCY,
+                                                 CONFIG_BT_PERIPHERAL_PREF_TIMEOUT));
+
+#if IS_ENABLED(CONFIG_ZMK_BLE_REBALANCE_NON_ACTIVE_CONN_PARAMS)
+    // Non-active connected profiles: relax so they consume fewer radio events,
+    // freeing connection-event time for the active link's HID stream.
+    for (uint8_t i = 0; i < ZMK_BLE_PROFILE_COUNT; i++) {
+        if (i == active_profile) {
+            continue;
+        }
+        request_profile_conn_params(i,
+                                    BT_LE_CONN_PARAM(CONFIG_ZMK_BLE_NON_ACTIVE_PREF_MIN_INT,
+                                                     CONFIG_ZMK_BLE_NON_ACTIVE_PREF_MAX_INT,
+                                                     CONFIG_ZMK_BLE_NON_ACTIVE_PREF_LATENCY,
+                                                     CONFIG_ZMK_BLE_NON_ACTIVE_PREF_TIMEOUT));
+    }
+#endif
 }
 
 static bool disconnect_non_active_profiles(void);
@@ -462,7 +494,7 @@ int zmk_ble_prof_select(uint8_t index) {
     }
 
     if (active_profile_connected) {
-        update_active_profile_conn_params();
+        rebalance_conn_params();
     }
 
     if (IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT) ||

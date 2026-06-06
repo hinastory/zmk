@@ -252,6 +252,35 @@ config ZMK_BLE_UPDATE_CONN_PARAMS_ON_PROFILE_SELECT
       HID behavior after keeping non-active host connections alive during
       manual BLE profile handoff.
 
+config ZMK_BLE_REBALANCE_NON_ACTIVE_CONN_PARAMS
+    bool "Relax connection parameters of non-active host profiles on profile select"
+    depends on ZMK_BLE_UPDATE_CONN_PARAMS_ON_PROFILE_SELECT
+    help
+      When selecting a connected host profile, also request relaxed connection
+      parameters for the other still-connected host profiles. Non-active hosts
+      then consume fewer radio events, reducing pointer/HID jitter on the active
+      link when multiple hosts stay connected after a manual BT_SEL handoff.
+
+config ZMK_BLE_NON_ACTIVE_PREF_MIN_INT
+    int "Non-active host preferred min connection interval (1.25ms units)"
+    depends on ZMK_BLE_REBALANCE_NON_ACTIVE_CONN_PARAMS
+    default 36
+
+config ZMK_BLE_NON_ACTIVE_PREF_MAX_INT
+    int "Non-active host preferred max connection interval (1.25ms units)"
+    depends on ZMK_BLE_REBALANCE_NON_ACTIVE_CONN_PARAMS
+    default 48
+
+config ZMK_BLE_NON_ACTIVE_PREF_LATENCY
+    int "Non-active host preferred slave latency"
+    depends on ZMK_BLE_REBALANCE_NON_ACTIVE_CONN_PARAMS
+    default 4
+
+config ZMK_BLE_NON_ACTIVE_PREF_TIMEOUT
+    int "Non-active host preferred supervision timeout (10ms units)"
+    depends on ZMK_BLE_REBALANCE_NON_ACTIVE_CONN_PARAMS
+    default 400
+
 config ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT
     bool "Save the active BLE profile after it connects"
     help
