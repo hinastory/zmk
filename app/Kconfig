@@ -228,13 +228,21 @@ config ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT
       profile when the user switches BLE profiles. This makes a manual BT_SEL
       behave like a hard handoff to the selected host.
 
+config ZMK_BLE_REJECT_NON_ACTIVE_ON_PROFILE_SELECT
+    bool "Reject new non-active BLE host connections when selecting a profile"
+    help
+      Rejects newly connected bonded host profiles other than the selected
+      active profile during a manual BT_SEL handoff, without disconnecting
+      already-connected non-active hosts.
+
 config ZMK_BLE_RESTART_ADV_DURING_PROFILE_HANDOFF
     bool "Restart advertising immediately during BLE profile handoff"
-    depends on ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT || ZMK_BLE_STARTUP_PROFILE_PRIORITY
+    depends on ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT || ZMK_BLE_REJECT_NON_ACTIVE_ON_PROFILE_SELECT || ZMK_BLE_STARTUP_PROFILE_PRIORITY
     help
-      Restarts host advertising immediately after requesting a non-active host
-      disconnect during profile select or startup profile priority. This reduces
-      handoff latency on boards with enough peripheral connection slots.
+      Restarts host advertising immediately during profile select or startup
+      profile priority handoff after requesting a non-active host disconnect
+      or rejecting a non-active host connection. This reduces handoff latency
+      on boards with enough peripheral connection slots.
 
 config ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT
     bool "Save the active BLE profile after it connects"

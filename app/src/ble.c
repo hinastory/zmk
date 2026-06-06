@@ -422,6 +422,7 @@ int zmk_ble_prof_select(uint8_t index) {
     bool active_profile_connected = false;
     bool disconnecting_non_active_profiles = false;
     if (IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT) ||
+        IS_ENABLED(CONFIG_ZMK_BLE_REJECT_NON_ACTIVE_ON_PROFILE_SELECT) ||
         IS_ENABLED(CONFIG_ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT)) {
         active_profile_connected = zmk_ble_active_profile_is_connected();
     }
@@ -434,8 +435,12 @@ int zmk_ble_prof_select(uint8_t index) {
         }
     }
 
-    if (IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT)) {
+    if (IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT) ||
+        IS_ENABLED(CONFIG_ZMK_BLE_REJECT_NON_ACTIVE_ON_PROFILE_SELECT)) {
         profile_select_handoff_active = !active_profile_connected;
+    }
+
+    if (IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT)) {
         disconnecting_non_active_profiles = disconnect_non_active_profiles();
     }
 
@@ -732,7 +737,8 @@ static void connected(struct bt_conn *conn, uint8_t err) {
     directed_adv_failed = false;
 
     int profile_index = zmk_ble_profile_index(bt_conn_get_dst(conn));
-    if (IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT) &&
+    if ((IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT) ||
+         IS_ENABLED(CONFIG_ZMK_BLE_REJECT_NON_ACTIVE_ON_PROFILE_SELECT)) &&
         profile_select_handoff_active && profile_index >= 0 && profile_index != active_profile) {
         int disconnect_err = bt_conn_disconnect(conn, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
         LOG_DBG("Rejecting non-active profile %d during profile-select handoff: %d",
