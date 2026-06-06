@@ -244,6 +244,14 @@ config ZMK_BLE_RESTART_ADV_DURING_PROFILE_HANDOFF
       or rejecting a non-active host connection. This reduces handoff latency
       on boards with enough peripheral connection slots.
 
+config ZMK_BLE_UPDATE_CONN_PARAMS_ON_PROFILE_SELECT
+    bool "Request preferred BLE connection parameters when selecting a connected profile"
+    help
+      Requests the preferred BLE connection parameters again when the user
+      selects an already-connected host profile. This helps restore low-latency
+      HID behavior after keeping non-active host connections alive during
+      manual BLE profile handoff.
+
 config ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT
     bool "Save the active BLE profile after it connects"
     help

@@ -402,6 +402,31 @@ static int ble_save_connected_profile(void) {
     return ble_save_profile();
 }
 
+static void update_active_profile_conn_params(void) {
+    if (!IS_ENABLED(CONFIG_ZMK_BLE_UPDATE_CONN_PARAMS_ON_PROFILE_SELECT)) {
+        return;
+    }
+
+    bt_addr_le_t *addr = &profiles[active_profile].peer;
+    if (!bt_addr_le_cmp(addr, BT_ADDR_LE_ANY)) {
+        return;
+    }
+
+    struct bt_conn *conn = bt_conn_lookup_addr_le(BT_ID_DEFAULT, addr);
+    if (conn == NULL) {
+        return;
+    }
+
+    int err = bt_conn_le_param_update(
+        conn, BT_LE_CONN_PARAM(CONFIG_BT_PERIPHERAL_PREF_MIN_INT,
+                               CONFIG_BT_PERIPHERAL_PREF_MAX_INT,
+                               CONFIG_BT_PERIPHERAL_PREF_LATENCY,
+                               CONFIG_BT_PERIPHERAL_PREF_TIMEOUT));
+    LOG_DBG("Requested active profile connection parameter update: %d", err);
+
+    bt_conn_unref(conn);
+}
+
 static bool disconnect_non_active_profiles(void);
 
 int zmk_ble_prof_select(uint8_t index) {
@@ -423,6 +448,7 @@ int zmk_ble_prof_select(uint8_t index) {
     bool disconnecting_non_active_profiles = false;
     if (IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT) ||
         IS_ENABLED(CONFIG_ZMK_BLE_REJECT_NON_ACTIVE_ON_PROFILE_SELECT) ||
+        IS_ENABLED(CONFIG_ZMK_BLE_UPDATE_CONN_PARAMS_ON_PROFILE_SELECT) ||
         IS_ENABLED(CONFIG_ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT)) {
         active_profile_connected = zmk_ble_active_profile_is_connected();
     }
@@ -433,6 +459,10 @@ int zmk_ble_prof_select(uint8_t index) {
         } else {
             ble_save_profile();
         }
+    }
+
+    if (active_profile_connected) {
+        update_active_profile_conn_params();
     }
 
     if (IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT) ||
