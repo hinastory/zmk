@@ -793,7 +793,7 @@ static void connected(struct bt_conn *conn, uint8_t err) {
             directed_adv_failed = true;
             LOG_DBG("Directed advertising timed out, falling back to open advertising");
         }
-        update_advertising();
+        k_work_submit(&update_advertising_work);
         return;
     }
     directed_adv_failed = false;
@@ -806,7 +806,7 @@ static void connected(struct bt_conn *conn, uint8_t err) {
         LOG_DBG("Rejecting non-active profile %d during profile-select handoff: %d",
                 profile_index, disconnect_err);
         if (disconnect_err || IS_ENABLED(CONFIG_ZMK_BLE_RESTART_ADV_DURING_PROFILE_HANDOFF)) {
-            update_advertising();
+            k_work_submit(&update_advertising_work);
         }
         return;
     }
@@ -817,7 +817,7 @@ static void connected(struct bt_conn *conn, uint8_t err) {
         LOG_DBG("Rejecting non-active profile %d during startup priority: %d", profile_index,
                 disconnect_err);
         if (disconnect_err || IS_ENABLED(CONFIG_ZMK_BLE_RESTART_ADV_DURING_PROFILE_HANDOFF)) {
-            update_advertising();
+            k_work_submit(&update_advertising_work);
         }
         return;
     }
@@ -842,7 +842,12 @@ static void connected(struct bt_conn *conn, uint8_t err) {
 
     LOG_DBG("Connected %s", addr);
 
-    update_advertising();
+    // Defer advertising restart to the system workqueue. Restarting extended
+    // advertising synchronously from this connection callback (BT RX thread)
+    // can deadlock the controller under multi-host churn — auto-select flips the
+    // active profile on every non-active host (re)connect, hammering this path.
+    // disconnected() already submits update_advertising_work for the same reason.
+    k_work_submit(&update_advertising_work);
 
     if (active_profile_changed || is_conn_active_profile(conn)) {
         LOG_DBG("Active profile connected");
