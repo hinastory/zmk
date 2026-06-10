@@ -206,6 +206,10 @@ config ZMK_BLE_THREAD_PRIORITY
     int "BLE notify thread priority"
     default 5
 
+config ZMK_BLE_MGMT_THREAD_STACK_SIZE
+    int "BLE profile/advertising maintenance thread stack size"
+    default 2048
+
 config ZMK_BLE_KEYBOARD_REPORT_QUEUE_SIZE
     int "Max number of keyboard HID reports to queue for sending over BLE"
     default 20
