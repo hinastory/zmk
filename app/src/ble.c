@@ -244,6 +244,11 @@ static void start_startup_profile_priority(void) {}
     }                                                                                              \
     advertising_status = ZMK_ADV_CONN;
 
+// Thread contract: bt_le_adv_stop()/bt_le_adv_start() below are blocking HCI
+// calls. Run this only on ble_mgmt_work_q (update_advertising_work / the
+// timeout works), single-threaded startup, or the Studio RPC thread
+// (set_device_name). NEVER call it from a BT stack callback (controller
+// deadlock) or the system workqueue (watchdog feed starvation -> reboot).
 int update_advertising(void) {
     int err = 0;
     bt_addr_le_t *addr;
@@ -791,7 +796,6 @@ static bool is_conn_active_profile(const struct bt_conn *conn) {
 static void connected(struct bt_conn *conn, uint8_t err) {
     char addr[BT_ADDR_LE_STR_LEN];
     struct bt_conn_info info;
-    LOG_DBG("Connected thread: %p", k_current_get());
 
     bt_conn_get_info(conn, &info);
 
@@ -1029,6 +1033,13 @@ static void auth_pairing_complete(struct bt_conn *conn, bool bonded) {
     ble_save_connected_profile();
     stop_startup_profile_priority();
     profile_select_handoff_active = false;
+#if IS_ENABLED(CONFIG_ZMK_BLE_REBALANCE_NON_ACTIVE_CONN_PARAMS)
+    // New bond: re-apply the conn param policy once GAP auto-update settles.
+    // connected() ran before this peer was bonded (profile_index was -1), so
+    // its rebalance hook did not arm for this link.
+    k_work_reschedule_for_queue(&ble_mgmt_work_q, &rebalance_conn_params_work,
+                                K_MSEC(REBALANCE_SETTLE_MS));
+#endif
     k_work_submit_to_queue(&ble_mgmt_work_q, &update_advertising_work);
 };
 
