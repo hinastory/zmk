@@ -836,7 +836,14 @@ static void connected(struct bt_conn *conn, uint8_t err) {
 #endif
 
     bool active_profile_changed = false;
-    if (profile_index >= 0 && profile_index != active_profile) {
+    // Auto-select rescues "connected but can't type": adopt the connecting
+    // host's profile only while the active profile's host is NOT connected.
+    // If the active host is connected and in use, a background host
+    // (re)connecting must not steal input focus — under multi-host the steal
+    // fired on every background idle-drop/reconnect cycle, and the resulting
+    // advertising/save churn drove the watchdog-reboot storms.
+    if (profile_index >= 0 && profile_index != active_profile &&
+        !zmk_ble_active_profile_is_connected()) {
         LOG_DBG("Switching active profile from %d to connected profile %d", active_profile,
                 profile_index);
         active_profile = profile_index;
