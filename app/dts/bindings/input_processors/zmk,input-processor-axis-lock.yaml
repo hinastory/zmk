@@ -1,0 +1,20 @@
+# Copyright (c) 2026 The ZMK Contributors
+# SPDX-License-Identifier: MIT
+
+description: Input processor that locks scrolling to the dominant axis
+
+compatible: "zmk,input-processor-axis-lock"
+
+include: ip_zero_param.yaml
+
+properties:
+  type:
+    type: int
+  wheel-code:
+    type: int
+  hwheel-code:
+    type: int
+  activate-threshold:
+    type: int
+  release-ms:
+    type: int

@@ -120,6 +120,11 @@ config ZMK_INPUT_PROCESSOR_GESTURES
     default y
     depends on DT_HAS_ZMK_INPUT_PROCESSOR_GESTURES_ENABLED
 
+config ZMK_INPUT_PROCESSOR_AXIS_LOCK
+    bool "Scroll Axis Lock Input Processor"
+    default y
+    depends on DT_HAS_ZMK_INPUT_PROCESSOR_AXIS_LOCK_ENABLED
+
 config ZMK_INPUT_SPLIT
     bool "Split input support"
     default y

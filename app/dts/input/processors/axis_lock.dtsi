@@ -1,0 +1,19 @@
+/*
+ * Copyright (c) 2026 The ZMK Contributors
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+ #include <zephyr/dt-bindings/input/input-event-codes.h>
+
+/ {
+    /omit-if-no-ref/ zip_scroll_axis_lock: zip_scroll_axis_lock {
+        compatible = "zmk,input-processor-axis-lock";
+        #input-processor-cells = <0>;
+        type = <INPUT_EV_REL>;
+        wheel-code = <INPUT_REL_WHEEL>;
+        hwheel-code = <INPUT_REL_HWHEEL>;
+        activate-threshold = <6>;
+        release-ms = <200>;
+    };
+};
