@@ -13,8 +13,23 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #include <pb_encode.h>
 #include <zmk/ble.h>
 #include <zmk/behavior.h>
+#include <zmk/keymap.h>
 #include <zmk/studio/core.h>
 #include <zmk/studio/rpc.h>
+#include <zmk/events/layer_state_changed.h>
+
+#if IS_ENABLED(CONFIG_ZMK_BATTERY_REPORTING)
+#include <zmk/battery.h>
+#include <zmk/events/battery_state_changed.h>
+#endif
+
+#if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING)
+#include <zmk/split/central.h>
+#endif
+
+#if IS_ENABLED(CONFIG_ZMK_USB)
+#include <zmk/usb.h>
+#endif
 
 ZMK_RPC_SUBSYSTEM(core)
 
@@ -176,6 +191,53 @@ zmk_studio_Response set_ble_profile_name(const zmk_studio_Request *req) {
 }
 #endif /* IS_ENABLED(CONFIG_ZMK_BLE) */
 
+// Set once the first peripheral (left-half) battery report is observed, so the
+// snapshot reports 255 "unknown" instead of a stale 0% before any reading arrives.
+#if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING)
+static bool s_peripheral_seen = false;
+#endif
+
+static zmk_core_RuntimeState build_runtime_state(void) {
+    zmk_core_RuntimeState state = zmk_core_RuntimeState_init_zero;
+
+    state.highest_layer = zmk_keymap_highest_layer_active();
+    // ZMK omits the implicitly-active default layer from the bitmask; OR it in so the
+    // bitmask stays consistent with highest_layer (which always reports >= default).
+    state.active_layers_bitmask = zmk_keymap_layer_state() | BIT(zmk_keymap_layer_default());
+
+#if IS_ENABLED(CONFIG_ZMK_BATTERY_REPORTING)
+    state.battery_central = zmk_battery_state_of_charge();
+#else
+    state.battery_central = 255; // unknown
+#endif
+
+#if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING)
+    uint8_t periph_level = 0;
+    if (s_peripheral_seen &&
+        zmk_split_central_get_peripheral_battery_level(0, &periph_level) == 0) {
+        state.battery_peripheral = periph_level;
+    } else {
+        state.battery_peripheral = 255; // unknown / not yet reported
+    }
+#else
+    state.battery_peripheral = 255; // unknown
+#endif
+
+#if IS_ENABLED(CONFIG_ZMK_USB)
+    state.charging = zmk_usb_is_powered();
+#else
+    state.charging = false;
+#endif
+
+    return state;
+}
+
+zmk_studio_Response get_runtime_state(const zmk_studio_Request *req) {
+    LOG_DBG("");
+    zmk_core_RuntimeState resp = build_runtime_state();
+    return CORE_RESPONSE(get_runtime_state, resp);
+}
+
 ZMK_RPC_SUBSYSTEM_HANDLER(core, get_device_info, ZMK_STUDIO_RPC_HANDLER_UNSECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(core, get_lock_state, ZMK_STUDIO_RPC_HANDLER_UNSECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(core, reset_settings, ZMK_STUDIO_RPC_HANDLER_SECURED);
@@ -187,6 +249,7 @@ ZMK_RPC_SUBSYSTEM_HANDLER(core, set_tapping_term, ZMK_STUDIO_RPC_HANDLER_SECURED
 #if IS_ENABLED(CONFIG_ZMK_BLE)
 ZMK_RPC_SUBSYSTEM_HANDLER(core, set_ble_profile_name, ZMK_STUDIO_RPC_HANDLER_SECURED);
 #endif
+ZMK_RPC_SUBSYSTEM_HANDLER(core, get_runtime_state, ZMK_STUDIO_RPC_HANDLER_UNSECURED);
 
 static int core_event_mapper(const zmk_event_t *eh, zmk_studio_Notification *n) {
     struct zmk_studio_core_lock_state_changed *lock_ev = as_zmk_studio_core_lock_state_changed(eh);
@@ -202,3 +265,34 @@ static int core_event_mapper(const zmk_event_t *eh, zmk_studio_Notification *n) 
 }
 
 ZMK_RPC_EVENT_MAPPER(core, core_event_mapper, zmk_studio_core_lock_state_changed);
+
+static int core_runtime_state_mapper(const zmk_event_t *eh, zmk_studio_Notification *n) {
+    bool matched = as_zmk_layer_state_changed(eh) != NULL;
+#if IS_ENABLED(CONFIG_ZMK_BATTERY_REPORTING)
+    matched = matched || as_zmk_battery_state_changed(eh) != NULL;
+#endif
+#if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING)
+    // Left-half battery changes arrive as peripheral events, not zmk_battery_state_changed.
+    if (as_zmk_peripheral_battery_state_changed(eh) != NULL) {
+        s_peripheral_seen = true;
+        matched = true;
+    }
+#endif
+
+    if (!matched) {
+        return -ENOTSUP;
+    }
+
+    *n = ZMK_RPC_NOTIFICATION(core, runtime_state_changed, build_runtime_state());
+    return 0;
+}
+
+#if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING)
+ZMK_RPC_EVENT_MAPPER(core_runtime_state, core_runtime_state_mapper, zmk_layer_state_changed,
+                     zmk_battery_state_changed, zmk_peripheral_battery_state_changed);
+#elif IS_ENABLED(CONFIG_ZMK_BATTERY_REPORTING)
+ZMK_RPC_EVENT_MAPPER(core_runtime_state, core_runtime_state_mapper, zmk_layer_state_changed,
+                     zmk_battery_state_changed);
+#else
+ZMK_RPC_EVENT_MAPPER(core_runtime_state, core_runtime_state_mapper, zmk_layer_state_changed);
+#endif
