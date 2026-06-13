@@ -12,6 +12,7 @@
 #include <zephyr/logging/log.h>
 #include <zmk/keymap.h>
 #include <zmk/behavior.h>
+#include <zmk/hid.h>
 #include <zmk/events/position_state_changed.h>
 #include <zmk/events/keycode_state_changed.h>
 #include <zmk/events/layer_state_changed.h>
@@ -251,6 +252,22 @@ static int handle_position_state_changed(const struct device *dev, const zmk_eve
     const struct temp_layer_config *cfg = dev->config;
 
     if (data->state.is_active) {
+        /* Keep AML active while a modifier is held (Shift+click / Ctrl+drag
+         * range/multi-select). Read the keyboard report modifier byte: &kp
+         * LSHIFT / mt_shift send the modifier as keycode 0xE0-0xE7 into it,
+         * leaving zmk_hid_get_explicit_mods() at 0 (verified on hardware).
+         * Position-independent (works wherever Shift is mapped) and does not
+         * depend on persisted excluded-positions. Deactivate synchronously
+         * otherwise, so a plain key resolves on the base layer in the SAME
+         * dispatch — deferring it lets the key fire its mouse-layer binding
+         * first (Codex review). Best-effort for the modifier's OWN press:
+         * relies on hold-while-undecided having latched the mod before this
+         * listener runs; a held modifier before a later click is always
+         * covered. */
+        if (zmk_hid_get_keyboard_report()->body.modifiers != 0) {
+            k_mutex_unlock(&data->lock);
+            return ZMK_EV_EVENT_BUBBLE;
+        }
         bool has_excluded = data->runtime.has_runtime_config
             ? (data->runtime.num_positions > 0)
             : (cfg->excluded_positions && cfg->num_positions > 0);
