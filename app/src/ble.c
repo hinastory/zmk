@@ -471,13 +471,6 @@ static void rebalance_conn_params(void) {
 #endif
 }
 
-static void rebalance_conn_params_work_cb(struct k_work *work) { rebalance_conn_params(); }
-static K_WORK_DELAYABLE_DEFINE(rebalance_conn_params_work, rebalance_conn_params_work_cb);
-
-// The host's GAP auto conn param update lands ~5s after connect and would
-// override anything requested earlier, so wait for it to settle first.
-#define REBALANCE_SETTLE_MS 6000
-
 static bool disconnect_non_active_profiles(void);
 
 int zmk_ble_prof_select(uint8_t index) {
@@ -513,7 +506,7 @@ int zmk_ble_prof_select(uint8_t index) {
     }
 
     if (active_profile_connected) {
-        k_work_reschedule_for_queue(&ble_mgmt_work_q, &rebalance_conn_params_work, K_NO_WAIT);
+        rebalance_conn_params();
     }
 
     if (IS_ENABLED(CONFIG_ZMK_BLE_DISCONNECT_NON_ACTIVE_ON_PROFILE_SELECT) ||
@@ -865,17 +858,6 @@ static void connected(struct bt_conn *conn, uint8_t err) {
         stop_startup_profile_priority();
         profile_select_handoff_active = false;
     }
-
-#if IS_ENABLED(CONFIG_ZMK_BLE_REBALANCE_NON_ACTIVE_CONN_PARAMS)
-    if (profile_index >= 0) {
-        // Re-apply the active/non-active conn param policy after this host's
-        // GAP auto-update settles. Without this, a host that (re)connects
-        // non-active keeps the tight preferred params and contends with the
-        // active link's radio time until the next BT_SEL.
-        k_work_reschedule_for_queue(&ble_mgmt_work_q, &rebalance_conn_params_work,
-                                    K_MSEC(REBALANCE_SETTLE_MS));
-    }
-#endif
 
     LOG_DBG("Connected %s", addr);
 
