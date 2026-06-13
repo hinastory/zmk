@@ -16,8 +16,15 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 static struct zmk_pointing_resolution_multipliers multipliers[ZMK_ENDPOINT_COUNT] = {
     [0 ... ZMK_ENDPOINT_COUNT - 1] =
         {
-            .wheel = 15,
-            .hor_wheel = 15,
+            // Conductor: default 0 (host has NOT requested a Resolution
+            // Multiplier) so apply_resolution_scaling uses div=16 and the
+            // high-resolution wheel units we emit are divided back to whole
+            // notches. Upstream defaults to 15 (div=1), which assumes the host
+            // always requests high resolution — hosts that never send the
+            // feature report (macOS/iPadOS/Android) then scrolled ~16x too fast.
+            // Windows sends the report and overrides this per-endpoint.
+            .wheel = 0,
+            .hor_wheel = 0,
         },
 };
 
