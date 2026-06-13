@@ -47,16 +47,6 @@ RING_BUF_DECLARE(passkey_entries, PASSKEY_DIGITS);
 
 #endif /* IS_ENABLED(CONFIG_ZMK_BLE_PASSKEY_ENTRY) */
 
-// BLE profile/advertising maintenance work runs on this dedicated queue, NOT
-// the system workqueue. bt_le_adv_stop()/bt_le_adv_start() issue synchronous
-// HCI commands that can block for seconds while the controller is busy with
-// multi-host radio scheduling, and the profile settings saves block on flash
-// writes. The hardware watchdog (watchdog.c) is fed from the system workqueue,
-// so blocking it past CONFIG_ZMK_WATCHDOG_TIMEOUT_MS resets the MCU — observed
-// as periodic ~30min reboots with 2+ bonded hosts (v0.5.4/v0.5.5).
-K_THREAD_STACK_DEFINE(ble_mgmt_q_stack, CONFIG_ZMK_BLE_MGMT_THREAD_STACK_SIZE);
-static struct k_work_q ble_mgmt_work_q;
-
 enum advertising_type {
     ZMK_ADV_NONE,
     ZMK_ADV_DIR,
@@ -156,7 +146,7 @@ void set_profile_address(uint8_t index, const bt_addr_le_t *addr) {
 #if IS_ENABLED(CONFIG_SETTINGS)
     settings_save_one(setting_name, &profiles[index], sizeof(struct zmk_ble_profile));
 #endif
-    k_work_submit_to_queue(&ble_mgmt_work_q, &raise_profile_changed_event_work);
+    k_work_submit(&raise_profile_changed_event_work);
 }
 
 bool zmk_ble_active_profile_is_connected(void) {
@@ -204,8 +194,8 @@ static void start_startup_profile_priority(void) {
     LOG_DBG("Prioritizing active profile %d for %d ms", active_profile,
             CONFIG_ZMK_BLE_STARTUP_PROFILE_PRIORITY_TIMEOUT_MS);
     startup_profile_priority_active = true;
-    k_work_reschedule_for_queue(&ble_mgmt_work_q, &startup_profile_priority_timeout_work,
-                                K_MSEC(CONFIG_ZMK_BLE_STARTUP_PROFILE_PRIORITY_TIMEOUT_MS));
+    k_work_reschedule(&startup_profile_priority_timeout_work,
+                      K_MSEC(CONFIG_ZMK_BLE_STARTUP_PROFILE_PRIORITY_TIMEOUT_MS));
 }
 #else
 static void stop_startup_profile_priority(void) {}
@@ -288,8 +278,7 @@ int update_advertising(void) {
     // advertising, cancel it for any other state. Use reschedule so re-entering DIR
     // (e.g. profile switch back to DIR) restarts the clock.
     if (advertising_status == ZMK_ADV_DIR) {
-        k_work_reschedule_for_queue(&ble_mgmt_work_q, &dir_adv_timeout_work,
-                                    K_MSEC(DIR_ADV_TIMEOUT_MS));
+        k_work_reschedule(&dir_adv_timeout_work, K_MSEC(DIR_ADV_TIMEOUT_MS));
     } else {
         k_work_cancel_delayable(&dir_adv_timeout_work);
     }
@@ -312,7 +301,7 @@ void zmk_ble_clear_bonds(void) {
     LOG_DBG("zmk_ble_clear_bonds()");
 
     clear_profile_bond(active_profile);
-    k_work_submit_to_queue(&ble_mgmt_work_q, &update_advertising_work);
+    update_advertising();
 };
 
 void zmk_ble_clear_all_bonds(void) {
@@ -325,7 +314,7 @@ void zmk_ble_clear_all_bonds(void) {
 
     // Automatically switch to profile 0
     zmk_ble_prof_select(0);
-    k_work_submit_to_queue(&ble_mgmt_work_q, &update_advertising_work);
+    update_advertising();
 };
 
 int zmk_ble_active_profile_index(void) { return active_profile; }
@@ -392,8 +381,7 @@ static int ble_save_profile(void) {
         return 0;
     }
 
-    return k_work_reschedule_for_queue(&ble_mgmt_work_q, &ble_save_work,
-                                       K_MSEC(CONFIG_ZMK_SETTINGS_SAVE_DEBOUNCE));
+    return k_work_reschedule(&ble_save_work, K_MSEC(CONFIG_ZMK_SETTINGS_SAVE_DEBOUNCE));
 #else
     return 0;
 #endif
@@ -407,8 +395,8 @@ static int ble_save_connected_profile(void) {
 
     k_work_cancel_delayable(&ble_save_work);
     pending_connected_profile_save = active_profile;
-    return k_work_reschedule_for_queue(&ble_mgmt_work_q, &ble_save_connected_work,
-                                       K_MSEC(CONFIG_ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT_DELAY_MS));
+    return k_work_reschedule(&ble_save_connected_work,
+                             K_MSEC(CONFIG_ZMK_BLE_SAVE_ACTIVE_PROFILE_ON_CONNECT_DELAY_MS));
 #endif
 
     return ble_save_profile();
@@ -520,7 +508,7 @@ int zmk_ble_prof_select(uint8_t index) {
 
     if (!disconnecting_non_active_profiles || active_profile_connected ||
         IS_ENABLED(CONFIG_ZMK_BLE_RESTART_ADV_DURING_PROFILE_HANDOFF)) {
-        k_work_submit_to_queue(&ble_mgmt_work_q, &update_advertising_work);
+        update_advertising();
     }
 
     if (active_profile_changed) {
@@ -805,7 +793,7 @@ static void connected(struct bt_conn *conn, uint8_t err) {
             directed_adv_failed = true;
             LOG_DBG("Directed advertising timed out, falling back to open advertising");
         }
-        k_work_submit_to_queue(&ble_mgmt_work_q, &update_advertising_work);
+        k_work_submit(&update_advertising_work);
         return;
     }
     directed_adv_failed = false;
@@ -818,7 +806,7 @@ static void connected(struct bt_conn *conn, uint8_t err) {
         LOG_DBG("Rejecting non-active profile %d during profile-select handoff: %d",
                 profile_index, disconnect_err);
         if (disconnect_err || IS_ENABLED(CONFIG_ZMK_BLE_RESTART_ADV_DURING_PROFILE_HANDOFF)) {
-            k_work_submit_to_queue(&ble_mgmt_work_q, &update_advertising_work);
+            k_work_submit(&update_advertising_work);
         }
         return;
     }
@@ -829,7 +817,7 @@ static void connected(struct bt_conn *conn, uint8_t err) {
         LOG_DBG("Rejecting non-active profile %d during startup priority: %d", profile_index,
                 disconnect_err);
         if (disconnect_err || IS_ENABLED(CONFIG_ZMK_BLE_RESTART_ADV_DURING_PROFILE_HANDOFF)) {
-            k_work_submit_to_queue(&ble_mgmt_work_q, &update_advertising_work);
+            k_work_submit(&update_advertising_work);
         }
         return;
     }
@@ -854,16 +842,16 @@ static void connected(struct bt_conn *conn, uint8_t err) {
 
     LOG_DBG("Connected %s", addr);
 
-    // Defer advertising restart to the BLE maintenance queue. Restarting
+    // Defer advertising restart to the system workqueue. Restarting extended
     // advertising synchronously from this connection callback (BT RX thread)
-    // can deadlock the controller under multi-host churn, and running it on the
-    // system workqueue starves the watchdog feed when the controller is busy.
-    // disconnected() defers for the same reason.
-    k_work_submit_to_queue(&ble_mgmt_work_q, &update_advertising_work);
+    // can deadlock the controller under multi-host churn — auto-select flips the
+    // active profile on every non-active host (re)connect, hammering this path.
+    // disconnected() already submits update_advertising_work for the same reason.
+    k_work_submit(&update_advertising_work);
 
     if (active_profile_changed || is_conn_active_profile(conn)) {
         LOG_DBG("Active profile connected");
-        k_work_submit_to_queue(&ble_mgmt_work_q, &raise_profile_changed_event_work);
+        k_work_submit(&raise_profile_changed_event_work);
     }
 }
 
@@ -884,11 +872,11 @@ static void disconnected(struct bt_conn *conn, uint8_t reason) {
 
     // We need to do this in a work callback, otherwise the advertising update will still see the
     // connection for a profile as active, and not start advertising yet.
-    k_work_submit_to_queue(&ble_mgmt_work_q, &update_advertising_work);
+    k_work_submit(&update_advertising_work);
 
     if (is_conn_active_profile(conn)) {
         LOG_DBG("Active profile disconnected");
-        k_work_submit_to_queue(&ble_mgmt_work_q, &raise_profile_changed_event_work);
+        k_work_submit(&raise_profile_changed_event_work);
     }
 }
 
@@ -1004,7 +992,7 @@ static void auth_pairing_complete(struct bt_conn *conn, bool bonded) {
     ble_save_connected_profile();
     stop_startup_profile_priority();
     profile_select_handoff_active = false;
-    k_work_submit_to_queue(&ble_mgmt_work_q, &update_advertising_work);
+    update_advertising();
 };
 
 static struct bt_conn_auth_cb zmk_ble_auth_cb_display = {
@@ -1073,10 +1061,6 @@ static int zmk_ble_complete_startup(void) {
 }
 
 static int zmk_ble_init(void) {
-    static const struct k_work_queue_config queue_config = {.name = "BLE Profile Mgmt"};
-    k_work_queue_start(&ble_mgmt_work_q, ble_mgmt_q_stack, K_THREAD_STACK_SIZEOF(ble_mgmt_q_stack),
-                       CONFIG_ZMK_BLE_THREAD_PRIORITY, &queue_config);
-
     int err = bt_enable(NULL);
 
     if (err < 0 && err != -EALREADY) {
