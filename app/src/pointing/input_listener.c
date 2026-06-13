@@ -271,7 +271,13 @@ static void apply_resolution_scaling(struct input_listener_data *data, struct in
     int16_t val = evt->value + *remainder;
     int16_t scaled = val / (int16_t)div;
     *remainder = val - (scaled * (int16_t)div);
-    evt->value = val;
+    /* Upstream ZMK assigns `val` here (the un-scaled sum), which leaves the
+     * wheel value un-divided so a host that requested a high resolution
+     * multiplier (e.g. Windows, div=1) scales it back down to ~1/16 — the
+     * "scroll became tiny on Windows" symptom. Assign the divided value so the
+     * FW emits high-resolution units that the host's multiplier converts back
+     * to whole notches. The remainder carries the sub-notch fraction. */
+    evt->value = scaled;
 }
 #endif // IS_ENABLED(CONFIG_ZMK_POINTING_SMOOTH_SCROLLING)
 
