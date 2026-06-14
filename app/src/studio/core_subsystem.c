@@ -16,11 +16,8 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #include <zmk/keymap.h>
 #include <zmk/studio/core.h>
 #include <zmk/studio/rpc.h>
-#include <zmk/events/layer_state_changed.h>
-
 #if IS_ENABLED(CONFIG_ZMK_BATTERY_REPORTING)
 #include <zmk/battery.h>
-#include <zmk/events/battery_state_changed.h>
 #endif
 
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING)
@@ -191,12 +188,6 @@ zmk_studio_Response set_ble_profile_name(const zmk_studio_Request *req) {
 }
 #endif /* IS_ENABLED(CONFIG_ZMK_BLE) */
 
-// Set once the first peripheral (left-half) battery report is observed, so the
-// snapshot reports 255 "unknown" instead of a stale 0% before any reading arrives.
-#if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING)
-static bool s_peripheral_seen = false;
-#endif
-
 static zmk_core_RuntimeState build_runtime_state(void) {
     zmk_core_RuntimeState state = zmk_core_RuntimeState_init_zero;
 
@@ -213,11 +204,11 @@ static zmk_core_RuntimeState build_runtime_state(void) {
 
 #if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING)
     uint8_t periph_level = 0;
-    if (s_peripheral_seen &&
-        zmk_split_central_get_peripheral_battery_level(0, &periph_level) == 0) {
+    // Polled only (after connect), so the peripheral has normally reported by now.
+    if (zmk_split_central_get_peripheral_battery_level(0, &periph_level) == 0) {
         state.battery_peripheral = periph_level;
     } else {
-        state.battery_peripheral = 255; // unknown / not yet reported
+        state.battery_peripheral = 255; // unknown / not configured
     }
 #else
     state.battery_peripheral = 255; // unknown
@@ -266,33 +257,8 @@ static int core_event_mapper(const zmk_event_t *eh, zmk_studio_Notification *n) 
 
 ZMK_RPC_EVENT_MAPPER(core, core_event_mapper, zmk_studio_core_lock_state_changed);
 
-static int core_runtime_state_mapper(const zmk_event_t *eh, zmk_studio_Notification *n) {
-    bool matched = as_zmk_layer_state_changed(eh) != NULL;
-#if IS_ENABLED(CONFIG_ZMK_BATTERY_REPORTING)
-    matched = matched || as_zmk_battery_state_changed(eh) != NULL;
-#endif
-#if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING)
-    // Left-half battery changes arrive as peripheral events, not zmk_battery_state_changed.
-    if (as_zmk_peripheral_battery_state_changed(eh) != NULL) {
-        s_peripheral_seen = true;
-        matched = true;
-    }
-#endif
-
-    if (!matched) {
-        return -ENOTSUP;
-    }
-
-    *n = ZMK_RPC_NOTIFICATION(core, runtime_state_changed, build_runtime_state());
-    return 0;
-}
-
-#if IS_ENABLED(CONFIG_ZMK_SPLIT_BLE_CENTRAL_BATTERY_LEVEL_FETCHING)
-ZMK_RPC_EVENT_MAPPER(core_runtime_state, core_runtime_state_mapper, zmk_layer_state_changed,
-                     zmk_battery_state_changed, zmk_peripheral_battery_state_changed);
-#elif IS_ENABLED(CONFIG_ZMK_BATTERY_REPORTING)
-ZMK_RPC_EVENT_MAPPER(core_runtime_state, core_runtime_state_mapper, zmk_layer_state_changed,
-                     zmk_battery_state_changed);
-#else
-ZMK_RPC_EVENT_MAPPER(core_runtime_state, core_runtime_state_mapper, zmk_layer_state_changed);
-#endif
+// runtime_state is intentionally REQUEST-ONLY: the host polls get_runtime_state.
+// A notification mapper here would fire on boot-time layer/battery events and run the
+// protobuf encode + transport TX synchronously on the small boot/main stack -> stack
+// overflow before USB enumerates. Polling keeps that work on the larger dedicated RPC
+// thread (ZMK_STUDIO_RPC_THREAD_STACK_SIZE), entirely off the boot path.
