@@ -134,3 +134,24 @@ config ZMK_BEHAVIOR_MACRO
     bool
     default y
     depends on DT_HAS_ZMK_BEHAVIOR_MACRO_ENABLED || DT_HAS_ZMK_BEHAVIOR_MACRO_ONE_PARAM_ENABLED || DT_HAS_ZMK_BEHAVIOR_MACRO_TWO_PARAM_ENABLED
+
+config CONDUCTOR_OS_PROFILE
+    bool "Conductor per-profile keymap overlay"
+    default n
+    help
+      Assigns an overlay keymap layer to each output endpoint (USB / BLE
+      profile). When an endpoint becomes the selected output the overlay layer
+      is activated on top of the shared keymap (and the previous one
+      deactivated), giving each device its own keymap where it differs while
+      &trans positions inherit the shared layers. When disabled (or with every
+      entry 0) the endpoint listener is inert and the keymap is unchanged.
+
+config CONDUCTOR_OS_PROFILE_DEFAULT_ON
+    bool "Per-profile keymap overlay enabled by default"
+    default n
+    depends on CONDUCTOR_OS_PROFILE
+    help
+      Initial runtime-enable state for the per-profile keymap overlay when no
+      persisted setting exists. A value saved over the Studio RPC
+      (set_os_config) overrides this default on subsequent boots. With the
+      overlay map all-zero this has no effect on the keymap.

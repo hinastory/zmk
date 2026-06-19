@@ -458,7 +458,7 @@ static int combo_settings_reset(void) {
 
 ZMK_RPC_SUBSYSTEM_SETTINGS_RESET(combo, combo_settings_reset);
 
-static int event_mapper(const zmk_event_t *eh, zmk_studio_Notification *n) { return 0; }
+static int event_mapper(const zmk_event_t *eh, zmk_studio_Notification *n) { return -ENOTSUP; }
 ZMK_RPC_EVENT_MAPPER(combo, event_mapper);
 
 /*

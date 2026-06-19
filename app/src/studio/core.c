@@ -7,6 +7,8 @@
 #include <zmk/studio/core.h>
 
 ZMK_EVENT_IMPL(zmk_studio_core_lock_state_changed);
+ZMK_EVENT_IMPL(zmk_studio_core_input_key_event);
+ZMK_EVENT_IMPL(zmk_studio_core_layer_state_event);
 
 static enum zmk_studio_core_lock_state state = IS_ENABLED(CONFIG_ZMK_STUDIO_LOCKING)
                                                    ? ZMK_STUDIO_CORE_LOCK_STATE_LOCKED

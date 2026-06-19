@@ -19,7 +19,18 @@ struct zmk_studio_core_lock_state_changed {
 
 struct zmk_studio_core_unlock_requested {};
 
+struct zmk_studio_core_input_key_event {
+    uint32_t position;
+    bool pressed;
+};
+
+struct zmk_studio_core_layer_state_event {
+    uint32_t highest_layer;
+};
+
 ZMK_EVENT_DECLARE(zmk_studio_core_lock_state_changed);
+ZMK_EVENT_DECLARE(zmk_studio_core_input_key_event);
+ZMK_EVENT_DECLARE(zmk_studio_core_layer_state_event);
 
 enum zmk_studio_core_lock_state zmk_studio_core_get_lock_state(void);
 
