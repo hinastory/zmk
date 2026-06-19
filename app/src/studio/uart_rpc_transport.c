@@ -59,6 +59,7 @@ static void uart_rx_main(void) {
             k_sleep(K_MSEC(1));
         } else {
             ring_buf_put_finish(ring_buf, 1);
+            zmk_rpc_set_rx_transport(ZMK_TRANSPORT_USB);
             zmk_rpc_rx_notify();
         }
     }
@@ -119,6 +120,7 @@ static void serial_cb(const struct device *dev, void *user_data) {
             }
         } while (last_read && last_read == len);
 
+        zmk_rpc_set_rx_transport(ZMK_TRANSPORT_USB);
         zmk_rpc_rx_notify();
     }
 

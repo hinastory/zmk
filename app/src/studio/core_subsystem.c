@@ -406,9 +406,12 @@ ZMK_LISTENER(core_input_layer, input_layer_listener);
 ZMK_SUBSCRIPTION(core_input_layer, zmk_layer_state_changed);
 
 // Dedicated worker thread. Raising the studio core events here makes the standard
-// studio_rpc listener encode + TX run on THIS thread's stack (4096, matching the proven
+// studio_rpc listener encode + TX run on THIS thread's stack (sized to match
 // CONFIG_ZMK_STUDIO_RPC_THREAD_STACK_SIZE), never on the keyscan/boot stack.
-static void input_stream_worker(void) {
+static void input_stream_worker(void *p1, void *p2, void *p3) {
+    ARG_UNUSED(p1);
+    ARG_UNUSED(p2);
+    ARG_UNUSED(p3);
     for (;;) {
         struct input_evt item;
         k_msgq_get(&input_evt_q, &item, K_FOREVER);
@@ -428,8 +431,8 @@ static void input_stream_worker(void) {
     }
 }
 
-K_THREAD_DEFINE(core_input_stream_thread, 4096, input_stream_worker, NULL, NULL, NULL,
-                K_LOWEST_APPLICATION_THREAD_PRIO, 0, 0);
+K_THREAD_DEFINE(core_input_stream_thread, CONFIG_ZMK_STUDIO_RPC_THREAD_STACK_SIZE,
+                input_stream_worker, NULL, NULL, NULL, K_LOWEST_APPLICATION_THREAD_PRIO, 0, 0);
 
 ZMK_RPC_SUBSYSTEM_HANDLER(core, get_device_info, ZMK_STUDIO_RPC_HANDLER_UNSECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(core, get_lock_state, ZMK_STUDIO_RPC_HANDLER_UNSECURED);

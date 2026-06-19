@@ -81,6 +81,7 @@ static ssize_t write_rpc_req(struct bt_conn *conn, const struct bt_gatt_attr *at
         ring_buf_put_finish(rpc_buf, claim_len);
     }
 
+    zmk_rpc_set_rx_transport(ZMK_TRANSPORT_BLE);
     zmk_rpc_rx_notify();
 
     return len;

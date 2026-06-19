@@ -78,6 +78,31 @@ static enum studio_framing_state rpc_framing_state;
 static K_MUTEX_DEFINE(rpc_transport_mutex);
 static struct zmk_rpc_transport *selected_transport;
 
+/* The transport that most recently received RPC data. Responses and
+ * notifications are sent back on this transport, decoupling Studio
+ * connectivity from the active HID output endpoint so the host can connect
+ * over USB or BLE regardless of which endpoint is currently selected for HID
+ * output. Written from RX context (incl. ISR), so kept lock-free via atomic. */
+static atomic_t active_rx_transport = ATOMIC_INIT(0);
+
+void zmk_rpc_set_rx_transport(enum zmk_transport transport) {
+    atomic_set(&active_rx_transport, (atomic_val_t)transport);
+}
+
+struct rpc_tx_ctx {
+    struct zmk_rpc_transport *transport;
+    void *user_data;
+};
+
+static struct zmk_rpc_transport *resolve_tx_transport(enum zmk_transport target) {
+    STRUCT_SECTION_FOREACH(zmk_rpc_transport, t) {
+        if (t->transport == target) {
+            return t;
+        }
+    }
+    return selected_transport;
+}
+
 struct ring_buf *zmk_rpc_get_rx_buf(void) { return &rpc_rx_buf; }
 
 void zmk_rpc_rx_notify(void) { k_sem_give(&rpc_rx_sem); }
@@ -120,7 +145,7 @@ RING_BUF_DECLARE(rpc_tx_buf, CONFIG_ZMK_STUDIO_RPC_TX_BUF_SIZE);
 struct ring_buf *zmk_rpc_get_tx_buf(void) { return &rpc_tx_buf; }
 
 static bool rpc_tx_buffer_write(pb_ostream_t *stream, const uint8_t *buf, size_t count) {
-    void *user_data = stream->state;
+    struct rpc_tx_ctx *ctx = (struct rpc_tx_ctx *)stream->state;
     size_t written = 0;
 
     bool escape_byte_already_written = false;
@@ -166,32 +191,37 @@ static bool rpc_tx_buffer_write(pb_ostream_t *stream, const uint8_t *buf, size_t
 
         written += (write_idx - escapes_written);
 
-        selected_transport->tx_notify(&rpc_tx_buf, write_idx, false, user_data);
+        ctx->transport->tx_notify(&rpc_tx_buf, write_idx, false, ctx->user_data);
     } while (written < count);
 
     return true;
 }
 
-static pb_ostream_t pb_ostream_for_tx_buf(void *user_data) {
-    pb_ostream_t stream = {&rpc_tx_buffer_write, (void *)user_data, SIZE_MAX, 0};
+static pb_ostream_t pb_ostream_for_tx_buf(struct rpc_tx_ctx *ctx) {
+    pb_ostream_t stream = {&rpc_tx_buffer_write, (void *)ctx, SIZE_MAX, 0};
     return stream;
 }
 
-static int send_response(const zmk_studio_Response *resp) {
+static int send_response(const zmk_studio_Response *resp, enum zmk_transport target) {
+    int ret = 0;
     k_mutex_lock(&rpc_transport_mutex, K_FOREVER);
 
-    if (!selected_transport) {
+    struct zmk_rpc_transport *tx = resolve_tx_transport(target);
+    if (!tx) {
         goto exit;
     }
 
-    void *user_data = selected_transport->tx_user_data ? selected_transport->tx_user_data() : NULL;
+    struct rpc_tx_ctx ctx = {
+        .transport = tx,
+        .user_data = tx->tx_user_data ? tx->tx_user_data() : NULL,
+    };
 
-    pb_ostream_t stream = pb_ostream_for_tx_buf(user_data);
+    pb_ostream_t stream = pb_ostream_for_tx_buf(&ctx);
 
     uint8_t framing_byte = FRAMING_SOF;
     ring_buf_put(&rpc_tx_buf, &framing_byte, 1);
 
-    selected_transport->tx_notify(&rpc_tx_buf, 1, false, user_data);
+    tx->tx_notify(&rpc_tx_buf, 1, false, ctx.user_data);
 
     /* Now we are ready to encode the message! */
     bool status = pb_encode(&stream, &zmk_studio_Response_msg, resp);
@@ -200,17 +230,18 @@ static int send_response(const zmk_studio_Response *resp) {
 #if !IS_ENABLED(CONFIG_NANOPB_NO_ERRMSG)
         LOG_ERR("Failed to encode the message %s", stream.errmsg);
 #endif // !IS_ENABLED(CONFIG_NANOPB_NO_ERRMSG)
-        return -EINVAL;
+        ret = -EINVAL;
+        goto exit;
     }
 
     framing_byte = FRAMING_EOF;
     ring_buf_put(&rpc_tx_buf, &framing_byte, 1);
 
-    selected_transport->tx_notify(&rpc_tx_buf, 1, true, user_data);
+    tx->tx_notify(&rpc_tx_buf, 1, true, ctx.user_data);
 
 exit:
     k_mutex_unlock(&rpc_transport_mutex);
-    return 0;
+    return ret;
 }
 
 static void rpc_main(void) {
@@ -225,9 +256,15 @@ static void rpc_main(void) {
         rpc_framing_state = FRAMING_STATE_IDLE;
 
         if (status) {
+            /* Bind the response to the transport that delivered this request,
+             * captured before handling so a byte arriving on the other transport
+             * mid-handler cannot redirect it. */
+            enum zmk_transport req_transport =
+                (enum zmk_transport)atomic_get(&active_rx_transport);
+
             zmk_studio_Response resp = handle_request(&req);
 
-            int err = send_response(&resp);
+            int err = send_response(&resp, req_transport);
 #if IS_ENABLED(CONFIG_THREAD_ANALYZER)
             thread_analyzer_print(0);
 #endif // IS_ENABLED(CONFIG_THREAD_ANALYZER)
@@ -243,40 +280,50 @@ static void rpc_main(void) {
 K_THREAD_DEFINE(studio_rpc_thread, CONFIG_ZMK_STUDIO_RPC_THREAD_STACK_SIZE, rpc_main, NULL, NULL,
                 NULL, K_LOWEST_APPLICATION_THREAD_PRIO, 0, 0);
 
+/* Start RX on every registered transport once, so Studio RPC is reachable over
+ * USB and BLE regardless of the active HID output endpoint. RX is never stopped:
+ * only the connected transport actually delivers data, and TX is routed back to
+ * whichever transport received the request (see resolve_tx_transport).
+ *
+ * The RX and TX ring buffers are shared across transports; this assumes a single
+ * active Studio client at a time (the normal case). rpc_main serializes
+ * responses, so back-to-back requests from one transport drain in FIFO order. */
+static void start_all_transports(void) {
+    STRUCT_SECTION_FOREACH(zmk_rpc_transport, t) {
+        if (t->rx_start) {
+            t->rx_start();
+        }
+    }
+}
+
+/* Track the active HID output endpoint's transport only as the default TX
+ * target for notifications raised before any request has been received. */
 static void refresh_selected_transport(void) {
     enum zmk_transport transport = zmk_endpoint_get_selected().transport;
 
     k_mutex_lock(&rpc_transport_mutex, K_FOREVER);
 
-    if (selected_transport && selected_transport->transport == transport) {
-        goto exit_refresh;
-    }
-
-    if (selected_transport) {
-        if (selected_transport->rx_stop) {
-            selected_transport->rx_stop();
-        }
-        selected_transport = NULL;
 #if IS_ENABLED(CONFIG_ZMK_STUDIO_LOCK_ON_DISCONNECT)
-        zmk_studio_core_lock();
+    bool transport_changed = selected_transport && selected_transport->transport != transport;
 #endif
-    }
 
     STRUCT_SECTION_FOREACH(zmk_rpc_transport, t) {
         if (t->transport == transport) {
             selected_transport = t;
-            if (selected_transport->rx_start) {
-                selected_transport->rx_start();
-            }
             break;
         }
     }
 
-    if (!selected_transport) {
-        LOG_WRN("Failed to select a transport!");
+#if IS_ENABLED(CONFIG_ZMK_STUDIO_LOCK_ON_DISCONNECT)
+    /* When the active HID output endpoint moves to a different transport, the
+     * previously connected Studio session is no longer reachable on it (e.g. USB
+     * unplug falling back to BLE). Lock so the device isn't left unlocked for a
+     * different transport's host. */
+    if (transport_changed) {
+        zmk_studio_core_lock();
     }
+#endif
 
-exit_refresh:
     k_mutex_unlock(&rpc_transport_mutex);
 }
 
@@ -307,6 +354,7 @@ static int zmk_rpc_init(void) {
         prev_sub->handlers_end_index = i - 1;
     }
 
+    start_all_transports();
     refresh_selected_transport();
 
     return 0;
@@ -326,7 +374,7 @@ static int studio_rpc_listener_cb(const zmk_event_t *eh) {
         zmk_studio_Response resp = zmk_studio_Response_init_zero;
         resp.which_type = zmk_studio_Response_notification_tag;
         resp.type.notification = rpc_notify->notification;
-        send_response(&resp);
+        send_response(&resp, (enum zmk_transport)atomic_get(&active_rx_transport));
         return ZMK_EV_EVENT_BUBBLE;
     }
 

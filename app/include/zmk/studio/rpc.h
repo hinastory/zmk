@@ -219,6 +219,13 @@ struct ring_buf *zmk_rpc_get_tx_buf(void);
 struct ring_buf *zmk_rpc_get_rx_buf(void);
 void zmk_rpc_rx_notify(void);
 
+/**
+ * @brief Record the transport that most recently received RPC data so that
+ *        responses and notifications are sent back over the same transport,
+ *        independent of the active HID output endpoint. Safe to call from ISR.
+ */
+void zmk_rpc_set_rx_transport(enum zmk_transport transport);
+
 #define ZMK_RPC_TRANSPORT(name, _transport, _rx_start, _rx_stop, _tx_user_data, _tx_notify)        \
     STRUCT_SECTION_ITERABLE(zmk_rpc_transport, name) = {                                           \
         .transport = _transport,                                                                   \
