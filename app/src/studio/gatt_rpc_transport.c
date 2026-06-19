@@ -28,6 +28,31 @@ static bool handling_rx = false;
 static K_SEM_DEFINE(indicate_sem, 1, 1);
 static atomic_t notify_size;
 
+/* Profile index of the host that most recently wrote an RPC request. Studio
+ * responses are indicated back to this host's connection rather than the
+ * active HID profile's, so Studio works over BLE regardless of which profile
+ * is currently selected for output. -1 falls back to the active profile. */
+static atomic_t rpc_resp_profile = ATOMIC_INIT(-1);
+
+/* Returns a ref'd connection (caller unrefs) for the host that should receive
+ * RPC responses, mirroring zmk_ble_active_profile_conn() semantics. Once a host
+ * has sent a request, responses are pinned to that host's profile: if it is no
+ * longer connected we return NULL (drop) rather than falling back to a
+ * different profile, which would misroute the response to the wrong host. */
+static struct bt_conn *gatt_resp_conn(void) {
+    int idx = (int)atomic_get(&rpc_resp_profile);
+    if (idx < 0) {
+        return zmk_ble_active_profile_conn();
+    }
+
+    bt_addr_le_t *addr = zmk_ble_profile_address((uint8_t)idx);
+    if (!addr || !bt_addr_le_cmp(addr, BT_ADDR_LE_ANY)) {
+        return NULL;
+    }
+
+    return bt_conn_lookup_addr_le(BT_ID_DEFAULT, addr);
+}
+
 static void rpc_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value) {
     ARG_UNUSED(attr);
 
@@ -65,6 +90,11 @@ static ssize_t write_rpc_req(struct bt_conn *conn, const struct bt_gatt_attr *at
                              uint16_t len, uint16_t offset, uint8_t flags) {
     if (!handling_rx) {
         return len;
+    }
+
+    int profile = zmk_ble_profile_index(bt_conn_get_dst(conn));
+    if (profile >= 0) {
+        atomic_set(&rpc_resp_profile, profile);
     }
 
     uint32_t copied = 0;
@@ -138,7 +168,7 @@ static struct bt_gatt_indicate_params rpc_indicate_params = {
 };
 
 static void notif_rpc_tx_cb(struct k_work *work) {
-    struct bt_conn *conn = zmk_ble_active_profile_conn();
+    struct bt_conn *conn = gatt_resp_conn();
     struct ring_buf *tx_buf = zmk_rpc_get_tx_buf();
 
     if (!conn) {
