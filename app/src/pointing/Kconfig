@@ -90,6 +90,11 @@ config ZMK_INPUT_PROCESSOR_STUDIO_POINTER_SCALER
     default y
     depends on DT_HAS_ZMK_INPUT_PROCESSOR_STUDIO_POINTER_SCALER_ENABLED
 
+config ZMK_INPUT_PROCESSOR_STUDIO_ACCEL
+    bool "Studio Dynamic Pointer Acceleration Input Processor"
+    default y
+    depends on DT_HAS_ZMK_INPUT_PROCESSOR_STUDIO_ACCEL_ENABLED
+
 config ZMK_POINTING_SENSOR_CPI_MULTIPLIER_NUM
     int "Sensor CPI multiplier numerator"
     default 1

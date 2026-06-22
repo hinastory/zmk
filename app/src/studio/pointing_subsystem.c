@@ -71,6 +71,16 @@ volatile int32_t studio_pointer_numerator = 1;
 volatile int32_t studio_pointer_denominator = 1;
 
 /*
+ * Global variables for the studio_accel input processor (pointer acceleration).
+ * Read at runtime by input_processor_studio_accel.c. enabled=0 => passthrough.
+ * max_milli is the maximum gain x1000 (2000 = 2.0x).
+ */
+volatile int32_t studio_accel_enabled = 0;
+volatile int32_t studio_accel_max_milli = 2000;
+volatile int32_t studio_accel_threshold = 4;
+volatile int32_t studio_accel_range = 16;
+
+/*
  * Persistent sensitivity settings.
  * numerator/denominator form a rational multiplier.
  * Default is 1/1 (no scaling change), CPI = 0 means "use default".
@@ -91,6 +101,10 @@ static struct {
     uint8_t aml_excluded_positions[AML_SETTINGS_MAX_EXCLUDED];
     uint32_t precision_numerator;
     uint32_t precision_denominator;
+    uint32_t accel_enabled;
+    uint32_t accel_max_milli;
+    uint32_t accel_threshold;
+    uint32_t accel_range;
 } pointing_settings = {
     .cursor_numerator = 1,
     .cursor_denominator = 1,
@@ -103,6 +117,10 @@ static struct {
     .aml_excluded_count = 0,
     .precision_numerator = 1,
     .precision_denominator = 4,
+    .accel_enabled = 0,
+    .accel_max_milli = 2000,
+    .accel_threshold = 4,
+    .accel_range = 16,
 };
 
 /* AML-specific persistent storage */
@@ -123,6 +141,7 @@ static struct {
 static int pointing_settings_set(const char *name, size_t len,
                                   settings_read_cb read_cb, void *cb_arg);
 static void apply_sensitivity(void);
+static void apply_accel(void);
 
 SETTINGS_STATIC_HANDLER_DEFINE(zmk_pointing_studio, "pointing/studio",
                                 NULL, pointing_settings_set, NULL, NULL);
@@ -322,6 +341,29 @@ static void apply_sensitivity(void) {
 }
 
 /*
+ * Push the stored acceleration parameters into the runtime globals read by the
+ * studio_accel input processor. Fills in sane defaults for fields that were
+ * zero-filled by the settings migration path (older saved blobs).
+ */
+static void apply_accel(void) {
+    if (pointing_settings.accel_max_milli == 0) {
+        pointing_settings.accel_max_milli = 2000;
+    }
+    if (pointing_settings.accel_range == 0) {
+        pointing_settings.accel_range = 16;
+    }
+
+    studio_accel_enabled = (int32_t)pointing_settings.accel_enabled;
+    studio_accel_max_milli = (int32_t)pointing_settings.accel_max_milli;
+    studio_accel_threshold = (int32_t)pointing_settings.accel_threshold;
+    studio_accel_range = (int32_t)pointing_settings.accel_range;
+
+    LOG_INF("Applying accel: enabled=%d max_milli=%d threshold=%d range=%d",
+            (int)studio_accel_enabled, (int)studio_accel_max_milli,
+            (int)studio_accel_threshold, (int)studio_accel_range);
+}
+
+/*
  * Apply settings on boot after settings are loaded.
  * This ensures saved sensitivity is restored after power cycle.
  */
@@ -338,6 +380,9 @@ static int pointing_studio_init(void) {
     }
     studio_pointer_numerator = (int32_t)pointing_settings.precision_numerator;
     studio_pointer_denominator = (int32_t)pointing_settings.precision_denominator;
+
+    /* Apply acceleration globals (defaults if storage empty) */
+    apply_accel();
 
     /* Restore AML from dedicated aml_persist storage */
     zmk_temp_layer_set_aml_enabled(aml_persist.enabled != 0);
@@ -504,9 +549,14 @@ static int pointing_settings_reset(void) {
     pointing_settings.cpi = 0;
     pointing_settings.scroll_inverted = 0;
     pointing_settings.aml_enabled = 1;
+    pointing_settings.accel_enabled = 0;
+    pointing_settings.accel_max_milli = 2000;
+    pointing_settings.accel_threshold = 4;
+    pointing_settings.accel_range = 16;
 
     /* Apply defaults */
     apply_sensitivity();
+    apply_accel();
     zmk_temp_layer_set_aml_enabled(true);
 
     /* Reset AML persist to defaults */
@@ -584,6 +634,61 @@ zmk_studio_Response set_precision_scale(const zmk_studio_Request *req) {
 
 ZMK_RPC_SUBSYSTEM_HANDLER(pointing, get_precision_scale, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(pointing, set_precision_scale, ZMK_STUDIO_RPC_HANDLER_SECURED);
+
+/* ===== Pointer Acceleration RPC Handlers ===== */
+
+zmk_studio_Response get_accel(const zmk_studio_Request *req) {
+    zmk_pointing_GetAccelResponse resp = zmk_pointing_GetAccelResponse_init_zero;
+
+    /* has_accel must be set for nanopb to serialize the submessage. */
+    resp.has_accel = true;
+    resp.accel.enabled = (pointing_settings.accel_enabled != 0);
+    resp.accel.max_milli =
+        pointing_settings.accel_max_milli ? pointing_settings.accel_max_milli : 2000;
+    resp.accel.threshold = pointing_settings.accel_threshold;
+    resp.accel.range = pointing_settings.accel_range ? pointing_settings.accel_range : 16;
+
+    LOG_INF("get_accel: enabled=%d max_milli=%u threshold=%u range=%u",
+            (int)resp.accel.enabled, resp.accel.max_milli, resp.accel.threshold,
+            resp.accel.range);
+    return POINTING_RESPONSE(get_accel, resp);
+}
+
+zmk_studio_Response set_accel(const zmk_studio_Request *req) {
+    const zmk_pointing_SetAccelRequest *set_req =
+        &req->subsystem.pointing.request_type.set_accel;
+
+    LOG_INF("set_accel: enabled=%d max_milli=%u threshold=%u range=%u",
+            (int)set_req->accel.enabled, set_req->accel.max_milli,
+            set_req->accel.threshold, set_req->accel.range);
+
+    pointing_settings.accel_enabled = set_req->accel.enabled ? 1 : 0;
+    pointing_settings.accel_max_milli =
+        set_req->accel.max_milli ? set_req->accel.max_milli : 2000;
+    pointing_settings.accel_threshold = set_req->accel.threshold;
+    pointing_settings.accel_range = set_req->accel.range ? set_req->accel.range : 16;
+
+    /* Apply to running system FIRST (immediate feedback) */
+    apply_accel();
+
+    /* Then persist to flash */
+    int ret = pointing_settings_save();
+    if (ret < 0) {
+        LOG_WRN("Failed to save accel settings: %d", ret);
+        zmk_pointing_SetAccelResponse resp = zmk_pointing_SetAccelResponse_init_zero;
+        resp.which_result = zmk_pointing_SetAccelResponse_err_tag;
+        resp.result.err = zmk_pointing_SetSensitivityErrorCode_SET_SENSITIVITY_ERR_STORAGE;
+        return POINTING_RESPONSE(set_accel, resp);
+    }
+
+    zmk_pointing_SetAccelResponse resp = zmk_pointing_SetAccelResponse_init_zero;
+    resp.which_result = zmk_pointing_SetAccelResponse_ok_tag;
+    resp.result.ok = true;
+    return POINTING_RESPONSE(set_accel, resp);
+}
+
+ZMK_RPC_SUBSYSTEM_HANDLER(pointing, get_accel, ZMK_STUDIO_RPC_HANDLER_SECURED);
+ZMK_RPC_SUBSYSTEM_HANDLER(pointing, set_accel, ZMK_STUDIO_RPC_HANDLER_SECURED);
 
 /* ===== AML (Auto Mouse Layer) RPC Handlers ===== */
 

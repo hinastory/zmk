@@ -1,0 +1,194 @@
+/*
+ * Copyright (c) 2025 The Conductor Contributors
+ *
+ * SPDX-License-Identifier: MIT
+ *
+ * Dynamic pointer-acceleration input processor for ZMK Studio.
+ *
+ * Applies a speed-dependent gain to relative X/Y cursor motion. The gain ramps
+ * linearly from 1.0x up to (max_milli/1000)x as the per-poll movement magnitude
+ * crosses `threshold` (counts/poll), reaching the maximum after `range`
+ * additional counts/poll. Parameters are read from globals set at runtime by
+ * the pointing_subsystem RPC handler; enabled == 0 -> passthrough (linear).
+ *
+ * The trackball driver reports one X event (sync=false) followed by one Y event
+ * (sync=true) per poll, at a near-constant sample rate while moving, so the
+ * per-poll magnitude is a usable velocity proxy without an explicit dt. To keep
+ * the same gain on both axes of a frame (and avoid direction distortion) the
+ * gain is derived from the previous completed frame's magnitude and applied to
+ * the current frame's X and Y (a single-poll, ~8ms lag).
+ *
+ * While the configured `bypass-layer` (the precision layer) is active the
+ * processor passes events through unchanged so it does not fight precision mode.
+ *
+ * Usage in devicetree:
+ *   studio_accel: studio_accel {
+ *       compatible = "zmk,input-processor-studio-accel";
+ *       #input-processor-cells = <0>;
+ *       codes = <INPUT_REL_X INPUT_REL_Y>;
+ *       bypass-layer = <PRECISION_LAYER>;
+ *   };
+ */
+
+#define DT_DRV_COMPAT zmk_input_processor_studio_accel
+
+#include <stdlib.h>
+#include <zephyr/kernel.h>
+#include <zephyr/device.h>
+#include <zephyr/logging/log.h>
+#include <drivers/input_processor.h>
+
+#include <zmk/keymap.h>
+
+LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
+
+/*
+ * External globals set by pointing_subsystem.c.
+ * These are the dynamic acceleration parameters.
+ */
+extern volatile int32_t studio_accel_enabled;
+extern volatile int32_t studio_accel_max_milli; /* max gain x1000 (2000 = 2.0x) */
+extern volatile int32_t studio_accel_threshold; /* counts/poll where accel starts */
+extern volatile int32_t studio_accel_range;     /* counts/poll span to reach max gain */
+
+/* Q8 fixed point: 256 == 1.0x */
+#define ACCEL_GAIN_UNITY 256
+
+struct studio_accel_config {
+    uint8_t type;
+    int16_t bypass_layer; /* layer that disables accel while active; -1 = none */
+    size_t codes_len;
+    uint16_t codes[];
+};
+
+struct studio_accel_data {
+    int16_t remainder_x;
+    int16_t remainder_y;
+    int16_t pending_x;      /* original X value seen this frame, consumed at Y */
+    bool have_pending_x;
+    uint16_t gain_q8;       /* gain applied to the CURRENT frame (one-poll lag) */
+};
+
+/* Linear ramp: 1.0x below threshold, up to max gain after `range` counts. */
+static uint16_t compute_gain_q8(int32_t magnitude) {
+    if (studio_accel_enabled == 0) {
+        return ACCEL_GAIN_UNITY;
+    }
+
+    int32_t threshold = studio_accel_threshold;
+    int32_t range = studio_accel_range;
+    int32_t max_milli = studio_accel_max_milli;
+
+    if (range <= 0) {
+        range = 1;
+    }
+    if (max_milli < 1000) {
+        max_milli = 1000; /* never attenuate below 1.0x */
+    }
+
+    if (magnitude <= threshold) {
+        return ACCEL_GAIN_UNITY;
+    }
+
+    int32_t over = magnitude - threshold;
+    if (over > range) {
+        over = range;
+    }
+
+    int32_t max_q8 = (max_milli * ACCEL_GAIN_UNITY) / 1000;
+    int32_t gain = ACCEL_GAIN_UNITY + ((max_q8 - ACCEL_GAIN_UNITY) * over) / range;
+
+    if (gain < ACCEL_GAIN_UNITY) {
+        gain = ACCEL_GAIN_UNITY;
+    }
+    return (uint16_t)gain;
+}
+
+static int16_t scale_with_remainder(int16_t value, uint16_t gain_q8, int16_t *remainder) {
+    int32_t v = (int32_t)value * (int32_t)gain_q8 + (int32_t)(*remainder);
+    int32_t scaled = v / ACCEL_GAIN_UNITY; /* truncates toward zero */
+    *remainder = (int16_t)(v - scaled * ACCEL_GAIN_UNITY);
+    return (int16_t)scaled;
+}
+
+static int studio_accel_handle_event(const struct device *dev, struct input_event *event,
+                                     uint32_t param1, uint32_t param2,
+                                     struct zmk_input_processor_state *state) {
+    const struct studio_accel_config *cfg = dev->config;
+    struct studio_accel_data *data = dev->data;
+
+    if (event->type != cfg->type) {
+        return ZMK_INPUT_PROC_CONTINUE;
+    }
+
+    bool matched = false;
+    for (int i = 0; i < cfg->codes_len; i++) {
+        if (cfg->codes[i] == event->code) {
+            matched = true;
+            break;
+        }
+    }
+    if (!matched) {
+        return ZMK_INPUT_PROC_CONTINUE;
+    }
+
+    /* Bypass entirely while the precision layer is active. */
+    if (cfg->bypass_layer >= 0 && zmk_keymap_layer_active((uint8_t)cfg->bypass_layer)) {
+        data->have_pending_x = false;
+        data->remainder_x = 0;
+        data->remainder_y = 0;
+        return ZMK_INPUT_PROC_CONTINUE;
+    }
+
+    if (data->gain_q8 == 0) {
+        data->gain_q8 = ACCEL_GAIN_UNITY; /* first event after boot */
+    }
+
+    if (event->code == 0x00 /* INPUT_REL_X */) {
+        /* Remember the original X for this frame's magnitude, then scale it
+         * with the gain computed from the previous frame. */
+        data->pending_x = event->value;
+        data->have_pending_x = true;
+        event->value = scale_with_remainder(event->value, data->gain_q8, &data->remainder_x);
+        return ZMK_INPUT_PROC_CONTINUE;
+    }
+
+    if (event->code == 0x01 /* INPUT_REL_Y */) {
+        int16_t orig_y = event->value;
+        event->value = scale_with_remainder(event->value, data->gain_q8, &data->remainder_y);
+
+        /* Y carries the frame sync: update the gain for the NEXT frame from this
+         * frame's combined magnitude (L1 norm is cheap and adequate). */
+        int32_t mag = (int32_t)abs(orig_y);
+        if (data->have_pending_x) {
+            mag += abs(data->pending_x);
+        }
+        data->have_pending_x = false;
+        data->gain_q8 = compute_gain_q8(mag);
+
+        LOG_DBG("studio_accel: mag=%d -> next gain_q8=%u", mag, data->gain_q8);
+        return ZMK_INPUT_PROC_CONTINUE;
+    }
+
+    return ZMK_INPUT_PROC_CONTINUE;
+}
+
+static struct zmk_input_processor_driver_api studio_accel_driver_api = {
+    .handle_event = studio_accel_handle_event,
+};
+
+#define STUDIO_ACCEL_INST(n)                                                                       \
+    static struct studio_accel_data studio_accel_data_##n = {                                       \
+        .gain_q8 = ACCEL_GAIN_UNITY,                                                               \
+    };                                                                                             \
+    static const struct studio_accel_config studio_accel_config_##n = {                            \
+        .type = DT_INST_PROP_OR(n, type, INPUT_EV_REL),                                            \
+        .bypass_layer = DT_INST_PROP_OR(n, bypass_layer, -1),                                      \
+        .codes_len = DT_INST_PROP_LEN(n, codes),                                                   \
+        .codes = DT_INST_PROP(n, codes),                                                           \
+    };                                                                                             \
+    DEVICE_DT_INST_DEFINE(n, NULL, NULL, &studio_accel_data_##n, &studio_accel_config_##n,          \
+                          POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEFAULT,                        \
+                          &studio_accel_driver_api);
+
+DT_INST_FOREACH_STATUS_OKAY(STUDIO_ACCEL_INST)

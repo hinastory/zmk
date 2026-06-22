@@ -1,0 +1,33 @@
+# Copyright (c) 2025 The Conductor Contributors
+# SPDX-License-Identifier: MIT
+
+description: |
+  Dynamic pointer-acceleration input processor for ZMK Studio.
+  Reads acceleration parameters from runtime variables set by the
+  pointing subsystem RPC handler, enabling real-time cursor
+  acceleration adjustment from Conductor Studio.
+
+compatible: "zmk,input-processor-studio-accel"
+
+include: base.yaml
+
+properties:
+  "#input-processor-cells":
+    type: int
+    required: true
+    const: 0
+  type:
+    type: int
+    default: 0x02  # INPUT_EV_REL
+  codes:
+    type: array
+    required: true
+  bypass-layer:
+    type: int
+    default: -1
+    description: |
+      Layer index that disables acceleration while active (e.g. the precision
+      layer). Set to -1 (default) to never bypass.
+
+input-processor-cells:
+  []
