@@ -20,6 +20,10 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 #include <zmk/keymap.h>
 #include <zmk/virtual_key_position.h>
 
+#if IS_ENABLED(CONFIG_CONDUCTOR_GESTURE_PROFILE)
+#include <zmk/conductor_gesture.h>
+#endif
+
 enum gesture_direction {
     GESTURE_UP,
     GESTURE_DOWN,
@@ -75,8 +79,18 @@ static int gestures_direction(const struct gestures_config *cfg, const struct ge
 
 static int gestures_queue_tap(const struct gestures_config *cfg, int direction,
                               struct zmk_input_processor_state *state) {
-    const struct zmk_behavior_binding *binding =
-        zmk_keymap_get_layer_binding_at_idx(cfg->layer_id, cfg->positions[direction]);
+    const struct zmk_behavior_binding *binding;
+#if IS_ENABLED(CONFIG_CONDUCTOR_GESTURE_PROFILE)
+    /* Per-device override for the current output endpoint; falls through to the
+     * gesture layer default when the feature is off or the slot is unset. */
+    struct zmk_behavior_binding override_binding;
+    if (conductor_gesture_get_binding(direction, &override_binding)) {
+        binding = &override_binding;
+    } else
+#endif
+    {
+        binding = zmk_keymap_get_layer_binding_at_idx(cfg->layer_id, cfg->positions[direction]);
+    }
     if (binding == NULL) {
         return -EINVAL;
     }

@@ -155,3 +155,14 @@ config CONDUCTOR_OS_PROFILE_DEFAULT_ON
       persisted setting exists. A value saved over the Studio RPC
       (set_os_config) overrides this default on subsequent boots. With the
       overlay map all-zero this has no effect on the keymap.
+
+config CONDUCTOR_GESTURE_PROFILE
+    bool "Conductor per-device trackball gesture overrides"
+    default n
+    help
+      Adds a per-output-endpoint (USB / BLE profile) override table for the
+      trackball gesture processor, so the same swipe can emit an OS-appropriate
+      shortcut depending on which device is the current output. Configured over
+      the Studio gesture RPC subsystem and persisted to settings. When disabled,
+      or for any direction with no override set, the gesture processor uses the
+      shared gesture layer (13) default exactly as before.
