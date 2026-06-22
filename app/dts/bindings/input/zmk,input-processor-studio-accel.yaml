@@ -22,6 +22,13 @@ properties:
   codes:
     type: array
     required: true
+  track-remainders:
+    type: boolean
+    description: |
+      Required by the input-listener (input_listener.c reads track_remainders on
+      every processor via DT_PROP). This processor keeps its own per-axis
+      remainder accumulator, so leave it unset (false) — declared only so the
+      property exists for the listener's macro expansion.
   bypass-layer:
     type: int
     default: -1
