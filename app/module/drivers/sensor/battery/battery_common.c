@@ -30,14 +30,15 @@ int battery_channel_get(const struct battery_value *value, enum sensor_channel c
 }
 
 uint8_t lithium_ion_mv_to_pct(int16_t bat_mv) {
-    // Simple linear approximation of a battery based off adafruit's discharge graph:
-    // https://learn.adafruit.com/li-ion-and-lipoly-batteries/voltages
+    // Conductor: anchor 100% at the full-charge resting/loaded voltage on XIAO BLE
+    // (~4.1V) rather than the 4.2V CV ceiling, so a completed charge reports 100%
+    // instead of capping near 88%. Linear map of the usable 3450-4100mV window.
 
-    if (bat_mv >= 4200) {
+    if (bat_mv >= 4100) {
         return 100;
     } else if (bat_mv <= 3450) {
         return 0;
     }
 
-    return bat_mv * 2 / 15 - 459;
+    return (bat_mv - 3450) * 2 / 13;
 }
