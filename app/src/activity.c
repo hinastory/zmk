@@ -63,6 +63,8 @@ int set_state(enum zmk_activity_state state) {
 
 enum zmk_activity_state zmk_activity_get_state(void) { return activity_state; }
 
+int zmk_activity_set_state(enum zmk_activity_state state) { return set_state(state); }
+
 static int note_activity(void) {
     activity_last_uptime = k_uptime_get();
 

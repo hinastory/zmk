@@ -15,6 +15,7 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
+#include <zmk/activity.h>
 #include <zmk/endpoints.h>
 
 // Reimplement some of the device work from Zephyr PM to work with the new `sys_poweroff` API.
@@ -97,6 +98,16 @@ int zmk_pm_soft_off(void) {
     // Need to sleep to give any other threads a chance so submit endpoint data.
     k_sleep(K_MSEC(100));
 #endif
+
+    // Signal sleep before suspending devices, while their buses are still up.
+    // The PMW3610 trackball listens for this to drop force-awake (an SPI write);
+    // if we waited until device suspend, the SPI controller is torn down first
+    // (forward suspend order) and the write would fail, leaving the sensor in
+    // active-current RUN mode for the whole soft-off and wasting the battery
+    // saving. Go through the setter so the stored activity state stays in sync
+    // for listeners that query it. Dispatch is synchronous, so writes complete
+    // before we proceed.
+    zmk_activity_set_state(ZMK_ACTIVITY_SLEEP);
 
     device_count = z_device_get_all_static(&devs);
 
