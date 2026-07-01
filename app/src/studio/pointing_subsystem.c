@@ -117,10 +117,13 @@ static struct {
     .aml_excluded_count = 0,
     .precision_numerator = 1,
     .precision_denominator = 4,
-    .accel_enabled = 0,
-    .accel_max_milli = 2000,
-    .accel_threshold = 4,
-    .accel_range = 16,
+    // Shipping default = Studio "弱" (weak) preset, so a freshly-flashed or
+    // settings-reset device has gentle acceleration on out of the box. Matches
+    // ACCEL_PRESETS '弱' in Conductor Studio (enabled / 1200 / 10 / 28).
+    .accel_enabled = 1,
+    .accel_max_milli = 1200,
+    .accel_threshold = 10,
+    .accel_range = 28,
 };
 
 /* AML-specific persistent storage */
@@ -549,10 +552,11 @@ static int pointing_settings_reset(void) {
     pointing_settings.cpi = 0;
     pointing_settings.scroll_inverted = 0;
     pointing_settings.aml_enabled = 1;
-    pointing_settings.accel_enabled = 0;
-    pointing_settings.accel_max_milli = 2000;
-    pointing_settings.accel_threshold = 4;
-    pointing_settings.accel_range = 16;
+    /* Match the shipping "弱" default (see the pointing_settings initializer). */
+    pointing_settings.accel_enabled = 1;
+    pointing_settings.accel_max_milli = 1200;
+    pointing_settings.accel_threshold = 10;
+    pointing_settings.accel_range = 28;
 
     /* Apply defaults */
     apply_sensitivity();
