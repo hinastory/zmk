@@ -1,0 +1,8 @@
+# Copyright (c) 2026 The Conductor Contributors
+# SPDX-License-Identifier: MIT
+
+description: Auto Mouse Layer (AML) enable/disable toggle behavior
+
+compatible: "zmk,behavior-aml-toggle"
+
+include: zero_param.yaml

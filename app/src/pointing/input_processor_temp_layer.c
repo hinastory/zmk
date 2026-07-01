@@ -44,6 +44,7 @@ struct temp_layer_runtime_config {
     bool has_runtime_config;
     int16_t require_prior_idle_ms;
     uint16_t require_prior_motion;
+    uint32_t deactivate_timeout_ms;
     uint16_t excluded_positions[TEMP_LAYER_MAX_EXCLUDED_POSITIONS];
     size_t num_positions;
 };
@@ -414,8 +415,13 @@ static int temp_layer_handle_event(const struct device *dev, struct input_event 
         }
     }
 
-    if (param2 > 0) {
-        k_work_reschedule(&layer_disable_works[param1], K_MSEC(param2));
+    /* Deactivation timeout: runtime override wins when set (>0),
+     * otherwise fall back to the DTS-provided param2 (default 60000ms). */
+    uint32_t timeout_ms = (data->runtime.has_runtime_config && data->runtime.deactivate_timeout_ms > 0)
+        ? data->runtime.deactivate_timeout_ms
+        : (uint32_t)param2;
+    if (timeout_ms > 0) {
+        k_work_reschedule(&layer_disable_works[param1], K_MSEC(timeout_ms));
     }
 
     k_mutex_unlock(&data->lock);
@@ -512,6 +518,59 @@ void zmk_temp_layer_set_motion_threshold(uint16_t threshold) {
 
     data->runtime.require_prior_motion = threshold;
     LOG_INF("Motion threshold set to %u", threshold);
+
+    k_mutex_unlock(&data->lock);
+}
+
+/* Public API: Get current effective deactivation timeout (0 = use DTS default) */
+uint32_t zmk_temp_layer_get_deactivate_timeout(void) {
+    const struct device *dev = DEVICE_DT_INST_GET(0);
+    if (!dev) {
+        return 0;
+    }
+
+    struct temp_layer_data *data = (struct temp_layer_data *)dev->data;
+
+    int ret = k_mutex_lock(&data->lock, K_FOREVER);
+    if (ret < 0) {
+        return 0;
+    }
+
+    uint32_t timeout = data->runtime.has_runtime_config
+        ? data->runtime.deactivate_timeout_ms
+        : 0;
+
+    k_mutex_unlock(&data->lock);
+    return timeout;
+}
+
+/* Public API: Set runtime deactivation timeout (0 = use DTS default) */
+void zmk_temp_layer_set_deactivate_timeout(uint32_t ms) {
+    const struct device *dev = DEVICE_DT_INST_GET(0);
+    if (!dev) {
+        return;
+    }
+
+    struct temp_layer_data *data = (struct temp_layer_data *)dev->data;
+
+    int ret = k_mutex_lock(&data->lock, K_FOREVER);
+    if (ret < 0) {
+        return;
+    }
+
+    if (!data->runtime.has_runtime_config) {
+        const struct temp_layer_config *cfg = dev->config;
+        data->runtime.has_runtime_config = true;
+        data->runtime.require_prior_idle_ms = cfg->require_prior_idle_ms;
+        data->runtime.require_prior_motion = cfg->require_prior_motion;
+        data->runtime.num_positions = cfg->num_positions;
+        for (size_t i = 0; i < cfg->num_positions && i < TEMP_LAYER_MAX_EXCLUDED_POSITIONS; i++) {
+            data->runtime.excluded_positions[i] = cfg->excluded_positions[i];
+        }
+    }
+
+    data->runtime.deactivate_timeout_ms = ms;
+    LOG_INF("Deactivate timeout set to %u", ms);
 
     k_mutex_unlock(&data->lock);
 }

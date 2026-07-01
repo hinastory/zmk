@@ -17,3 +17,10 @@ typedef uint16_t zmk_mouse_button_t;
  * scroll direction without going through Studio. Persists to settings.
  */
 void zmk_pointing_toggle_scroll_invert(void);
+
+/**
+ * Toggle the Auto Mouse Layer (AML) enabled state.
+ * Used by the &aml_toggle behavior so a key/combo can enable or disable AML
+ * without going through Studio. Persists to settings so it survives reboot.
+ */
+void zmk_pointing_toggle_aml(void);

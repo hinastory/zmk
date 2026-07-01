@@ -1,0 +1,16 @@
+/*
+ * Copyright (c) 2026 The Conductor Contributors
+ *
+ * SPDX-License-Identifier: MIT
+ */
+
+/ {
+    behaviors {
+        // Behavior can be invoked on peripherals, so name must be <= 8 characters.
+        aml_tog: aml_toggle {
+            compatible = "zmk,behavior-aml-toggle";
+            #binding-cells = <0>;
+            display-name = "Toggle Auto Mouse Layer";
+        };
+    };
+};
