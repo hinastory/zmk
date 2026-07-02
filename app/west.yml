@@ -40,8 +40,11 @@ manifest:
       revision: f1db87ee98f1810328a8419572fa42a3b5f352ae
       path: modules/lib/gui/lvgl
       remote: zmkfirmware
+    # Keep in sync with the conductor config repo's west.yml (which overrides
+    # this pin in CI builds — this one only matters for standalone fork builds,
+    # where a stale pin silently drops conductor RPC protos). Bump per release.
     - name: zmk-studio-messages
-      revision: 69224f6
+      revision: release/conductor-0.6.7
       path: modules/msgs/zmk-studio-messages
       remote: pite1222
   group-filter: [+optional]
