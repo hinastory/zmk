@@ -11,12 +11,15 @@
  * additional counts/poll. Parameters are read from globals set at runtime by
  * the pointing_subsystem RPC handler; enabled == 0 -> passthrough (linear).
  *
- * The trackball driver reports one X event (sync=false) followed by one Y event
- * (sync=true) per poll, at a near-constant sample rate while moving, so the
- * per-poll magnitude is a usable velocity proxy without an explicit dt. To keep
- * the same gain on both axes of a frame (and avoid direction distortion) the
- * gain is derived from the previous completed frame's magnitude and applied to
- * the current frame's X and Y (a single-poll, ~8ms lag).
+ * The trackball driver reports up to one X and one Y event per poll, at a
+ * near-constant sample rate while moving, so the per-poll magnitude is a usable
+ * velocity proxy without an explicit dt. The driver omits an axis whose delta
+ * is zero, so a poll may consist of X only, Y only, or X then Y; whichever
+ * event is last carries sync=true. To keep the same gain on both axes of a
+ * frame (and avoid direction distortion) the gain is derived from the previous
+ * completed frame's magnitude — accumulated per event and latched at the sync
+ * boundary — and applied to the current frame's X and Y (a single-poll, ~8ms
+ * lag).
  *
  * While the configured `bypass-layer` (the precision layer) is active the
  * processor passes events through unchanged so it does not fight precision mode.
@@ -64,8 +67,7 @@ struct studio_accel_config {
 struct studio_accel_data {
     int16_t remainder_x;
     int16_t remainder_y;
-    int16_t pending_x;      /* original X value seen this frame, consumed at Y */
-    bool have_pending_x;
+    int32_t frame_mag;      /* L1 magnitude accumulated over the current frame */
     uint16_t gain_q8;       /* gain applied to the CURRENT frame (one-poll lag) */
 };
 
@@ -132,11 +134,15 @@ static int studio_accel_handle_event(const struct device *dev, struct input_even
         return ZMK_INPUT_PROC_CONTINUE;
     }
 
-    /* Bypass entirely while the precision layer is active. */
+    /* Bypass entirely while the precision layer is active. Also drop the gain
+     * back to 1.0x so motion resumes unaccelerated (and re-ramps) when the
+     * precision layer is left, instead of inheriting a stale pre-precision
+     * gain for one frame. */
     if (cfg->bypass_layer >= 0 && zmk_keymap_layer_active((uint8_t)cfg->bypass_layer)) {
-        data->have_pending_x = false;
+        data->frame_mag = 0;
         data->remainder_x = 0;
         data->remainder_y = 0;
+        data->gain_q8 = ACCEL_GAIN_UNITY;
         return ZMK_INPUT_PROC_CONTINUE;
     }
 
@@ -144,30 +150,24 @@ static int studio_accel_handle_event(const struct device *dev, struct input_even
         data->gain_q8 = ACCEL_GAIN_UNITY; /* first event after boot */
     }
 
+    int16_t orig = event->value;
     if (event->code == 0x00 /* INPUT_REL_X */) {
-        /* Remember the original X for this frame's magnitude, then scale it
-         * with the gain computed from the previous frame. */
-        data->pending_x = event->value;
-        data->have_pending_x = true;
-        event->value = scale_with_remainder(event->value, data->gain_q8, &data->remainder_x);
+        event->value = scale_with_remainder(orig, data->gain_q8, &data->remainder_x);
+    } else if (event->code == 0x01 /* INPUT_REL_Y */) {
+        event->value = scale_with_remainder(orig, data->gain_q8, &data->remainder_y);
+    } else {
         return ZMK_INPUT_PROC_CONTINUE;
     }
+    data->frame_mag += abs(orig);
 
-    if (event->code == 0x01 /* INPUT_REL_Y */) {
-        int16_t orig_y = event->value;
-        event->value = scale_with_remainder(event->value, data->gain_q8, &data->remainder_y);
-
-        /* Y carries the frame sync: update the gain for the NEXT frame from this
-         * frame's combined magnitude (L1 norm is cheap and adequate). */
-        int32_t mag = (int32_t)abs(orig_y);
-        if (data->have_pending_x) {
-            mag += abs(data->pending_x);
-        }
-        data->have_pending_x = false;
-        data->gain_q8 = compute_gain_q8(mag);
-
-        LOG_DBG("studio_accel: mag=%d -> next gain_q8=%u", mag, data->gain_q8);
-        return ZMK_INPUT_PROC_CONTINUE;
+    /* The last event of a poll carries sync regardless of axis (the driver
+     * omits zero-delta axes, so X-only and Y-only frames are normal). Latch
+     * the gain for the NEXT frame from this frame's combined magnitude at
+     * that boundary (L1 norm is cheap and adequate). */
+    if (event->sync) {
+        data->gain_q8 = compute_gain_q8(data->frame_mag);
+        LOG_DBG("studio_accel: mag=%d -> next gain_q8=%u", data->frame_mag, data->gain_q8);
+        data->frame_mag = 0;
     }
 
     return ZMK_INPUT_PROC_CONTINUE;

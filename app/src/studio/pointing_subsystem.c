@@ -46,6 +46,18 @@ ZMK_RPC_SUBSYSTEM(pointing)
 #define DEFAULT_CPI 800
 
 /*
+ * Acceleration parameter bounds. The accel processor multiplies deltas by a
+ * Q8 gain in int32 and casts back to int16, so an unbounded max_milli from a
+ * buggy/hostile Studio client could overflow (gain math UB, int16 wrap =
+ * cursor direction flip). Clamp like CPI is clamped via normalize_cpi().
+ */
+#define ACCEL_MAX_MILLI_MIN 1000 /* 1.0x — never attenuate */
+#define ACCEL_MAX_MILLI_MAX 5000 /* 5.0x */
+#define ACCEL_THRESHOLD_MAX 100  /* counts/poll */
+#define ACCEL_RANGE_MIN 1
+#define ACCEL_RANGE_MAX 200
+
+/*
  * Try to get the trackball device from devicetree.
  * The conductor board defines it as &trackball in the overlay.
  */
@@ -372,6 +384,25 @@ static void apply_accel(void) {
     }
     if (pointing_settings.accel_range == 0) {
         pointing_settings.accel_range = 16;
+    }
+
+    /* Clamp to sane bounds; covers both the set_accel RPC path (called before
+     * the settings save, so the clamped values are what get persisted) and
+     * values loaded from an old/corrupt settings blob. */
+    if (pointing_settings.accel_max_milli < ACCEL_MAX_MILLI_MIN) {
+        pointing_settings.accel_max_milli = ACCEL_MAX_MILLI_MIN;
+    }
+    if (pointing_settings.accel_max_milli > ACCEL_MAX_MILLI_MAX) {
+        pointing_settings.accel_max_milli = ACCEL_MAX_MILLI_MAX;
+    }
+    if (pointing_settings.accel_threshold > ACCEL_THRESHOLD_MAX) {
+        pointing_settings.accel_threshold = ACCEL_THRESHOLD_MAX;
+    }
+    if (pointing_settings.accel_range < ACCEL_RANGE_MIN) {
+        pointing_settings.accel_range = ACCEL_RANGE_MIN;
+    }
+    if (pointing_settings.accel_range > ACCEL_RANGE_MAX) {
+        pointing_settings.accel_range = ACCEL_RANGE_MAX;
     }
 
     studio_accel_enabled = (int32_t)pointing_settings.accel_enabled;
