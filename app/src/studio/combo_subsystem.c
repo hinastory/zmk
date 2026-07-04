@@ -42,6 +42,22 @@ struct combo_storage_entry {
 static struct combo_storage_entry stored_combos[MAX_STORED_COMBOS];
 static int stored_combo_count = 0;
 static bool combos_loaded_from_settings = false;
+/* One-time decode-bug heal marker (see apply_stored_combos). Loaded from
+ * settings; once set, stored &none combos on DT-default positions are
+ * treated as intentional user overrides again. */
+static bool combo_heal_done = false;
+/* Set when the healed combo blob failed to re-save: keeps the heal armed for
+ * the next boot instead of stamping the marker over an unhealed store. */
+static bool combo_heal_save_failed = false;
+
+/* Only the DT defaults bound to behaviors that pre-2026-07 Studio could not
+ * decode (and therefore rewrote as &none) are heal targets: the A+M+L toggle
+ * and the sleep combo. &none stored on any other DT default's positions is
+ * treated as an intentional user override and left alone. */
+static bool combo_heal_target_default(const char *behavior_dev) {
+    return behavior_dev && (strcmp(behavior_dev, "aml_toggle") == 0 ||
+                            strcmp(behavior_dev, "z_so_off") == 0);
+}
 
 /* Forward declaration */
 static int combo_settings_set(const char *name, size_t len,
@@ -57,6 +73,20 @@ static int combo_settings_commit(void) {
     if (combos_loaded_from_settings) {
         LOG_INF("Settings commit: applying %d stored combos", stored_combo_count);
         apply_stored_combos();
+    }
+    /* Mark the one-time decode-bug heal as done so later intentional &none
+     * overrides of DT-default combos persist normally. Saving during commit
+     * mirrors the behavior local_id table (behavior.c). Skipped when the
+     * healed blob failed to save — the heal then retries next boot. */
+    if (!combo_heal_done && !combo_heal_save_failed) {
+        static const uint8_t done = 1;
+        int rc = settings_save_one("combo/studio/heal1", &done, sizeof(done));
+        if (rc == 0) {
+            combo_heal_done = true;
+        } else {
+            /* Heal stays armed for the next boot; it is idempotent. */
+            LOG_WRN("Failed to persist combo heal marker: %d", rc);
+        }
     }
     return 0;
 }
@@ -96,6 +126,13 @@ static int combo_settings_set(const char *name, size_t len,
         }
         return rc;
     }
+    if (strcmp(name, "heal1") == 0) {
+        uint8_t done = 0;
+        if (read_cb(cb_arg, &done, sizeof(done)) >= 0 && done) {
+            combo_heal_done = true;
+        }
+        return 0;
+    }
     return -ENOENT;
 }
 
@@ -123,6 +160,7 @@ static int apply_stored_combos(void) {
     }
 
     int applied_count = 0;
+    int healed_count = 0;
 
     /* Add stored combos */
     for (int i = 0; i < MAX_STORED_COMBOS; i++) {
@@ -156,6 +194,27 @@ static int apply_stored_combos(void) {
             continue;
         }
 
+        /* One-time self-heal: pre-2026-07 Studio builds mis-decoded DT-default
+         * combos bound to custom behaviors (&aml_tog, &soft_off) as "none" on
+         * Read and persisted &none at the same key positions on Write — which
+         * then blocked zmk_combo_add_missing_dt_defaults() forever (position
+         * match). On the first boot of this firmware, drop such entries and
+         * let the DT default come back below. Runs ONCE (combo/studio/heal1
+         * marker, set in combo_settings_commit) and only for the two defaults
+         * that could actually be corrupted (combo_heal_target_default). */
+        if (!combo_heal_done && strcmp(behavior_name, "none") == 0 &&
+            combo_heal_target_default(zmk_combo_dt_default_behavior_at_positions(&cfg))) {
+            LOG_WRN("Dropping stored &none combo %d shadowing a DT default (Studio decode-bug heal)",
+                    i);
+            /* Deactivate in the staging array too, and re-save below —
+             * otherwise the entry would be re-applied on the next boot once
+             * the heal marker is set. */
+            stored_combos[i].active = false;
+            stored_combo_count--;
+            healed_count++;
+            continue;
+        }
+
         int ret = zmk_combo_add(&cfg);
         if (ret < 0) {
             LOG_WRN("Failed to restore combo %d: %d", i, ret);
@@ -166,6 +225,14 @@ static int apply_stored_combos(void) {
 
     LOG_INF("Applied %d stored combos", applied_count);
     zmk_combo_add_missing_dt_defaults();
+    if (healed_count > 0) {
+        int rc = combo_settings_save();
+        if (rc != 0) {
+            combo_heal_save_failed = true;
+        }
+        LOG_WRN("Healed %d corrupted combo(s); storage re-save %s (%d)", healed_count,
+                rc == 0 ? "ok" : "failed", rc);
+    }
     return 0;
 }
 

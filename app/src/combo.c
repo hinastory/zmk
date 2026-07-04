@@ -761,6 +761,31 @@ bool zmk_combo_cfg_is_dt_default(const struct zmk_combo_cfg_data *cfg) {
     return false;
 }
 
+/* Positions-only DT-default lookup: when cfg sits on exactly the same key
+ * positions as some DT default combo (regardless of what cfg is bound to),
+ * returns that default's behavior device name; NULL otherwise. Used to detect
+ * stored combos that shadow a DT default. */
+const char *zmk_combo_dt_default_behavior_at_positions(const struct zmk_combo_cfg_data *cfg) {
+    if (!cfg || cfg->key_position_len < 2 || cfg->key_position_len > MAX_COMBO_KEYS) {
+        return NULL;
+    }
+
+    struct combo_cfg candidate = {
+        .key_position_len = cfg->key_position_len,
+        .active = true,
+    };
+    memcpy(candidate.key_positions, cfg->key_positions,
+           sizeof(int32_t) * cfg->key_position_len);
+
+    for (int dt_idx = 0; dt_idx < (int)DT_COMBO_COUNT; dt_idx++) {
+        if (combo_has_same_positions(&candidate, &dt_combos[dt_idx])) {
+            return dt_combos[dt_idx].behavior.behavior_dev;
+        }
+    }
+
+    return NULL;
+}
+
 int zmk_combo_add_missing_dt_defaults(void) {
     int added = 0;
 
