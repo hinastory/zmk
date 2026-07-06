@@ -8,12 +8,12 @@
  * Applies a speed-dependent gain to relative X/Y cursor motion. The gain ramps
  * linearly from 1.0x up to (max_milli/1000)x as the per-poll movement magnitude
  * crosses `threshold` (counts/poll), reaching the maximum after `range`
- * additional counts/poll. Below `slow_range` counts/poll the gain instead
- * ramps from (min_milli/1000)x to 1.0x — below 1.0 decelerates slow movements
- * for fine pointing, above 1.0 boosts them for a lighter feel (min_milli ==
- * 1000 disables the low-speed zone). Parameters are read from globals set at
- * runtime by the pointing_subsystem RPC handler; enabled == 0 -> passthrough
- * (linear).
+ * additional counts/poll. Below `slow_range` counts/poll the gain is instead
+ * held flat at (min_milli/1000)x, returning linearly to 1.0x by `threshold` —
+ * below 1.0 decelerates slow movements for fine pointing, above 1.0 boosts
+ * them for a lighter feel (min_milli == 1000 disables the low-speed zone).
+ * Parameters are read from globals set at runtime by the pointing_subsystem
+ * RPC handler; enabled == 0 -> passthrough (linear).
  *
  * The trackball driver reports up to one X and one Y event per poll, at a
  * near-constant sample rate while moving, so the per-poll magnitude is a usable
@@ -77,9 +77,9 @@ struct studio_accel_data {
     uint16_t gain_q8;       /* gain applied to the CURRENT frame (one-poll lag) */
 };
 
-/* Piecewise-linear gain: min gain at the slowest speeds ramping to 1.0x at
- * `slow_range`, flat 1.0x up to `threshold`, then up to max gain after `range`
- * additional counts. */
+/* Piecewise-linear gain: flat min gain up to `slow_range` (so the whole slow
+ * zone is clearly felt, not just near-zero speeds), ramping back to 1.0x at
+ * `threshold`, then up to max gain after `range` additional counts. */
 static uint16_t compute_gain_q8(int32_t magnitude) {
     if (studio_accel_enabled == 0) {
         return ACCEL_GAIN_UNITY;
@@ -98,20 +98,29 @@ static uint16_t compute_gain_q8(int32_t magnitude) {
 
     if (magnitude <= threshold) {
         int32_t min_milli = studio_accel_min_milli;
-        /* Cap the ramp end at threshold so the slow and fast zones never
+        /* Cap the flat zone at threshold so the slow and fast zones never
          * overlap even if slow_range is configured larger. */
         int32_t slow_end = studio_accel_slow_range;
         if (slow_end > threshold) {
             slow_end = threshold;
         }
-        if (min_milli == 1000 || min_milli <= 0 || slow_end <= 0 ||
-            magnitude >= slow_end) {
+        if (min_milli == 1000 || min_milli <= 0 || slow_end <= 0) {
             return ACCEL_GAIN_UNITY;
         }
         /* min < 1.0 decelerates slow movements (precision), min > 1.0 boosts
-         * them (lighter feel); either way the ramp converges on 1.0x. */
+         * them (lighter feel). Flat min across the slow zone, then a linear
+         * return to 1.0x by threshold (a hard step if slow_end == threshold). */
         int32_t min_q8 = (min_milli * ACCEL_GAIN_UNITY) / 1000;
-        int32_t gain = min_q8 + ((ACCEL_GAIN_UNITY - min_q8) * magnitude) / slow_end;
+        int32_t gain;
+        if (magnitude <= slow_end) {
+            gain = min_q8;
+        } else if (magnitude >= threshold) {
+            gain = ACCEL_GAIN_UNITY;
+        } else {
+            gain = min_q8 +
+                   ((ACCEL_GAIN_UNITY - min_q8) * (magnitude - slow_end)) /
+                       (threshold - slow_end);
+        }
         int32_t lo = min_q8 < ACCEL_GAIN_UNITY ? min_q8 : ACCEL_GAIN_UNITY;
         int32_t hi = min_q8 > ACCEL_GAIN_UNITY ? min_q8 : ACCEL_GAIN_UNITY;
         if (gain < lo) {
