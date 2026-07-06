@@ -56,8 +56,8 @@ ZMK_RPC_SUBSYSTEM(pointing)
 #define ACCEL_THRESHOLD_MAX 100  /* counts/poll */
 #define ACCEL_RANGE_MIN 1
 #define ACCEL_RANGE_MAX 200
-#define ACCEL_MIN_MILLI_MIN 200  /* 0.2x — floor for the low-speed precision gain */
-#define ACCEL_MIN_MILLI_MAX 1000 /* 1.0x — low-speed zone never accelerates */
+#define ACCEL_MIN_MILLI_MIN 200  /* 0.2x — floor for the low-speed gain */
+#define ACCEL_MIN_MILLI_MAX 2000 /* 2.0x — ceiling for the low-speed boost */
 #define ACCEL_SLOW_RANGE_MAX 100 /* counts/poll */
 
 /*

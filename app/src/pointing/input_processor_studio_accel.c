@@ -9,10 +9,11 @@
  * linearly from 1.0x up to (max_milli/1000)x as the per-poll movement magnitude
  * crosses `threshold` (counts/poll), reaching the maximum after `range`
  * additional counts/poll. Below `slow_range` counts/poll the gain instead
- * ramps from (min_milli/1000)x up to 1.0x, decelerating slow movements for
- * fine pointing (min_milli >= 1000 disables the low-speed zone). Parameters
- * are read from globals set at runtime by the pointing_subsystem RPC handler;
- * enabled == 0 -> passthrough (linear).
+ * ramps from (min_milli/1000)x to 1.0x — below 1.0 decelerates slow movements
+ * for fine pointing, above 1.0 boosts them for a lighter feel (min_milli ==
+ * 1000 disables the low-speed zone). Parameters are read from globals set at
+ * runtime by the pointing_subsystem RPC handler; enabled == 0 -> passthrough
+ * (linear).
  *
  * The trackball driver reports up to one X and one Y event per poll, at a
  * near-constant sample rate while moving, so the per-poll magnitude is a usable
@@ -103,14 +104,21 @@ static uint16_t compute_gain_q8(int32_t magnitude) {
         if (slow_end > threshold) {
             slow_end = threshold;
         }
-        if (min_milli >= 1000 || min_milli <= 0 || slow_end <= 0 ||
+        if (min_milli == 1000 || min_milli <= 0 || slow_end <= 0 ||
             magnitude >= slow_end) {
             return ACCEL_GAIN_UNITY;
         }
+        /* min < 1.0 decelerates slow movements (precision), min > 1.0 boosts
+         * them (lighter feel); either way the ramp converges on 1.0x. */
         int32_t min_q8 = (min_milli * ACCEL_GAIN_UNITY) / 1000;
         int32_t gain = min_q8 + ((ACCEL_GAIN_UNITY - min_q8) * magnitude) / slow_end;
-        if (gain > ACCEL_GAIN_UNITY) {
-            gain = ACCEL_GAIN_UNITY;
+        int32_t lo = min_q8 < ACCEL_GAIN_UNITY ? min_q8 : ACCEL_GAIN_UNITY;
+        int32_t hi = min_q8 > ACCEL_GAIN_UNITY ? min_q8 : ACCEL_GAIN_UNITY;
+        if (gain < lo) {
+            gain = lo;
+        }
+        if (gain > hi) {
+            gain = hi;
         }
         return (uint16_t)gain;
     }
