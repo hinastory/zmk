@@ -44,7 +44,7 @@ manifest:
     # this pin in CI builds — this one only matters for standalone fork builds,
     # where a stale pin silently drops conductor RPC protos). Bump per release.
     - name: zmk-studio-messages
-      revision: release/conductor-0.6.7
+      revision: test/accel-min-gain
       path: modules/msgs/zmk-studio-messages
       remote: pite1222
   group-filter: [+optional]

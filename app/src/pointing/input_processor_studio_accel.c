@@ -8,8 +8,11 @@
  * Applies a speed-dependent gain to relative X/Y cursor motion. The gain ramps
  * linearly from 1.0x up to (max_milli/1000)x as the per-poll movement magnitude
  * crosses `threshold` (counts/poll), reaching the maximum after `range`
- * additional counts/poll. Parameters are read from globals set at runtime by
- * the pointing_subsystem RPC handler; enabled == 0 -> passthrough (linear).
+ * additional counts/poll. Below `slow_range` counts/poll the gain instead
+ * ramps from (min_milli/1000)x up to 1.0x, decelerating slow movements for
+ * fine pointing (min_milli >= 1000 disables the low-speed zone). Parameters
+ * are read from globals set at runtime by the pointing_subsystem RPC handler;
+ * enabled == 0 -> passthrough (linear).
  *
  * The trackball driver reports up to one X and one Y event per poll, at a
  * near-constant sample rate while moving, so the per-poll magnitude is a usable
@@ -50,9 +53,11 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
  * These are the dynamic acceleration parameters.
  */
 extern volatile int32_t studio_accel_enabled;
-extern volatile int32_t studio_accel_max_milli; /* max gain x1000 (2000 = 2.0x) */
-extern volatile int32_t studio_accel_threshold; /* counts/poll where accel starts */
-extern volatile int32_t studio_accel_range;     /* counts/poll span to reach max gain */
+extern volatile int32_t studio_accel_max_milli;  /* max gain x1000 (2000 = 2.0x) */
+extern volatile int32_t studio_accel_threshold;  /* counts/poll where accel starts */
+extern volatile int32_t studio_accel_range;      /* counts/poll span to reach max gain */
+extern volatile int32_t studio_accel_min_milli;  /* low-speed gain x1000 (1000 = off) */
+extern volatile int32_t studio_accel_slow_range; /* counts/poll span of min->1.0x ramp */
 
 /* Q8 fixed point: 256 == 1.0x */
 #define ACCEL_GAIN_UNITY 256
@@ -71,7 +76,9 @@ struct studio_accel_data {
     uint16_t gain_q8;       /* gain applied to the CURRENT frame (one-poll lag) */
 };
 
-/* Linear ramp: 1.0x below threshold, up to max gain after `range` counts. */
+/* Piecewise-linear gain: min gain at the slowest speeds ramping to 1.0x at
+ * `slow_range`, flat 1.0x up to `threshold`, then up to max gain after `range`
+ * additional counts. */
 static uint16_t compute_gain_q8(int32_t magnitude) {
     if (studio_accel_enabled == 0) {
         return ACCEL_GAIN_UNITY;
@@ -85,11 +92,27 @@ static uint16_t compute_gain_q8(int32_t magnitude) {
         range = 1;
     }
     if (max_milli < 1000) {
-        max_milli = 1000; /* never attenuate below 1.0x */
+        max_milli = 1000; /* never attenuate below 1.0x in the fast zone */
     }
 
     if (magnitude <= threshold) {
-        return ACCEL_GAIN_UNITY;
+        int32_t min_milli = studio_accel_min_milli;
+        /* Cap the ramp end at threshold so the slow and fast zones never
+         * overlap even if slow_range is configured larger. */
+        int32_t slow_end = studio_accel_slow_range;
+        if (slow_end > threshold) {
+            slow_end = threshold;
+        }
+        if (min_milli >= 1000 || min_milli <= 0 || slow_end <= 0 ||
+            magnitude >= slow_end) {
+            return ACCEL_GAIN_UNITY;
+        }
+        int32_t min_q8 = (min_milli * ACCEL_GAIN_UNITY) / 1000;
+        int32_t gain = min_q8 + ((ACCEL_GAIN_UNITY - min_q8) * magnitude) / slow_end;
+        if (gain > ACCEL_GAIN_UNITY) {
+            gain = ACCEL_GAIN_UNITY;
+        }
+        return (uint16_t)gain;
     }
 
     int32_t over = magnitude - threshold;

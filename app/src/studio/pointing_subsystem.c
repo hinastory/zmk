@@ -56,6 +56,9 @@ ZMK_RPC_SUBSYSTEM(pointing)
 #define ACCEL_THRESHOLD_MAX 100  /* counts/poll */
 #define ACCEL_RANGE_MIN 1
 #define ACCEL_RANGE_MAX 200
+#define ACCEL_MIN_MILLI_MIN 200  /* 0.2x — floor for the low-speed precision gain */
+#define ACCEL_MIN_MILLI_MAX 1000 /* 1.0x — low-speed zone never accelerates */
+#define ACCEL_SLOW_RANGE_MAX 100 /* counts/poll */
 
 /*
  * Try to get the trackball device from devicetree.
@@ -93,6 +96,8 @@ volatile int32_t studio_accel_enabled = 0;
 volatile int32_t studio_accel_max_milli = 2000;
 volatile int32_t studio_accel_threshold = 4;
 volatile int32_t studio_accel_range = 16;
+volatile int32_t studio_accel_min_milli = 1000; /* low-speed gain x1000 (1000 = off) */
+volatile int32_t studio_accel_slow_range = 6;   /* counts/poll span of min->1.0x ramp */
 
 /*
  * Persistent sensitivity settings.
@@ -119,6 +124,10 @@ static struct {
     uint32_t accel_max_milli;
     uint32_t accel_threshold;
     uint32_t accel_range;
+    /* Appended in 0.6.10 (the settings migration zero-fills them from older
+     * blobs; apply_accel() maps 0 to the defaults). */
+    uint32_t accel_min_milli;
+    uint32_t accel_slow_range;
 } pointing_settings = {
     .cursor_numerator = 1,
     .cursor_denominator = 1,
@@ -138,6 +147,11 @@ static struct {
     .accel_max_milli = 1200,
     .accel_threshold = 10,
     .accel_range = 28,
+    /* TEST BUILD default: gentle low-speed precision zone (0.7x under 6
+     * counts/poll) so it can be felt without Studio UI. Decide the shipping
+     * default before the official 0.6.10 release. */
+    .accel_min_milli = 700,
+    .accel_slow_range = 6,
 };
 
 /* AML-specific persistent storage */
@@ -160,6 +174,7 @@ static struct {
 static int pointing_settings_set(const char *name, size_t len,
                                   settings_read_cb read_cb, void *cb_arg);
 static void apply_sensitivity(void);
+static void apply_precision(void);
 static void apply_accel(void);
 
 SETTINGS_STATIC_HANDLER_DEFINE(zmk_pointing_studio, "pointing/studio",
@@ -178,6 +193,16 @@ static int pointing_settings_set(const char *name, size_t len,
             pointing_settings.scroll_numerator = 1;
             pointing_settings.scroll_denominator = 1;
             pointing_settings.aml_enabled = 1;
+            /* Seed accel defaults too: a blob that predates these fields must
+             * keep the shipping "弱" acceleration instead of the zero-fill
+             * (enabled=0) reaching apply_accel() below. Blobs that do contain
+             * them are simply overwritten by read_cb. */
+            pointing_settings.accel_enabled = 1;
+            pointing_settings.accel_max_milli = 1200;
+            pointing_settings.accel_threshold = 10;
+            pointing_settings.accel_range = 28;
+            pointing_settings.accel_min_milli = 700;
+            pointing_settings.accel_slow_range = 6;
             /* Read old data over the defaults */
             int rc = read_cb(cb_arg, &pointing_settings, read_len);
             if (rc >= 0) {
@@ -186,6 +211,8 @@ static int pointing_settings_set(const char *name, size_t len,
                 studio_scroll_denominator = (int32_t)pointing_settings.scroll_denominator;
                 studio_scroll_inverted = (pointing_settings.scroll_inverted != 0);
                 apply_sensitivity();
+                apply_precision();
+                apply_accel();
             }
             return rc;
         }
@@ -203,6 +230,12 @@ static int pointing_settings_set(const char *name, size_t len,
             studio_scroll_denominator = (int32_t)pointing_settings.scroll_denominator;
             studio_scroll_inverted = (pointing_settings.scroll_inverted != 0);
             apply_sensitivity();
+            /* Also re-apply precision + accel globals: pointing_studio_init
+             * (SYS_INIT) ran before settings_load(), so without this the
+             * saved values sat in pointing_settings without reaching the
+             * input processors until the next Studio RPC. */
+            apply_precision();
+            apply_accel();
             LOG_INF("Applied pointing settings from flash: inverted=%d", (int)studio_scroll_inverted);
         }
         return rc;
@@ -374,6 +407,19 @@ static void apply_sensitivity(void) {
 }
 
 /*
+ * Push the stored precision-mode scale into the runtime globals read by the
+ * studio_pointer_scaler input processor (default 1/4 if storage is empty).
+ */
+static void apply_precision(void) {
+    if (pointing_settings.precision_denominator == 0) {
+        pointing_settings.precision_numerator = 1;
+        pointing_settings.precision_denominator = 4;
+    }
+    studio_pointer_numerator = (int32_t)pointing_settings.precision_numerator;
+    studio_pointer_denominator = (int32_t)pointing_settings.precision_denominator;
+}
+
+/*
  * Push the stored acceleration parameters into the runtime globals read by the
  * studio_accel input processor. Fills in sane defaults for fields that were
  * zero-filled by the settings migration path (older saved blobs).
@@ -384,6 +430,14 @@ static void apply_accel(void) {
     }
     if (pointing_settings.accel_range == 0) {
         pointing_settings.accel_range = 16;
+    }
+    if (pointing_settings.accel_min_milli == 0) {
+        /* Zero-filled by migration from a pre-0.6.10 blob. TEST BUILD: default
+         * to the gentle low-speed precision zone (see the initializer). */
+        pointing_settings.accel_min_milli = 700;
+    }
+    if (pointing_settings.accel_slow_range == 0) {
+        pointing_settings.accel_slow_range = 6;
     }
 
     /* Clamp to sane bounds; covers both the set_accel RPC path (called before
@@ -404,15 +458,27 @@ static void apply_accel(void) {
     if (pointing_settings.accel_range > ACCEL_RANGE_MAX) {
         pointing_settings.accel_range = ACCEL_RANGE_MAX;
     }
+    if (pointing_settings.accel_min_milli < ACCEL_MIN_MILLI_MIN) {
+        pointing_settings.accel_min_milli = ACCEL_MIN_MILLI_MIN;
+    }
+    if (pointing_settings.accel_min_milli > ACCEL_MIN_MILLI_MAX) {
+        pointing_settings.accel_min_milli = ACCEL_MIN_MILLI_MAX;
+    }
+    if (pointing_settings.accel_slow_range > ACCEL_SLOW_RANGE_MAX) {
+        pointing_settings.accel_slow_range = ACCEL_SLOW_RANGE_MAX;
+    }
 
     studio_accel_enabled = (int32_t)pointing_settings.accel_enabled;
     studio_accel_max_milli = (int32_t)pointing_settings.accel_max_milli;
     studio_accel_threshold = (int32_t)pointing_settings.accel_threshold;
     studio_accel_range = (int32_t)pointing_settings.accel_range;
+    studio_accel_min_milli = (int32_t)pointing_settings.accel_min_milli;
+    studio_accel_slow_range = (int32_t)pointing_settings.accel_slow_range;
 
-    LOG_INF("Applying accel: enabled=%d max_milli=%d threshold=%d range=%d",
+    LOG_INF("Applying accel: enabled=%d max_milli=%d threshold=%d range=%d min_milli=%d slow_range=%d",
             (int)studio_accel_enabled, (int)studio_accel_max_milli,
-            (int)studio_accel_threshold, (int)studio_accel_range);
+            (int)studio_accel_threshold, (int)studio_accel_range,
+            (int)studio_accel_min_milli, (int)studio_accel_slow_range);
 }
 
 /*
@@ -426,12 +492,7 @@ static int pointing_studio_init(void) {
     studio_scroll_inverted = (pointing_settings.scroll_inverted != 0);
 
     /* Apply precision scale globals (default 1/4 if storage empty) */
-    if (pointing_settings.precision_denominator == 0) {
-        pointing_settings.precision_numerator = 1;
-        pointing_settings.precision_denominator = 4;
-    }
-    studio_pointer_numerator = (int32_t)pointing_settings.precision_numerator;
-    studio_pointer_denominator = (int32_t)pointing_settings.precision_denominator;
+    apply_precision();
 
     /* Apply acceleration globals (defaults if storage empty) */
     apply_accel();
@@ -609,6 +670,8 @@ static int pointing_settings_reset(void) {
     pointing_settings.accel_max_milli = 1200;
     pointing_settings.accel_threshold = 10;
     pointing_settings.accel_range = 28;
+    pointing_settings.accel_min_milli = 700;
+    pointing_settings.accel_slow_range = 6;
 
     /* Apply defaults */
     apply_sensitivity();
@@ -707,10 +770,14 @@ zmk_studio_Response get_accel(const zmk_studio_Request *req) {
         pointing_settings.accel_max_milli ? pointing_settings.accel_max_milli : 2000;
     resp.accel.threshold = pointing_settings.accel_threshold;
     resp.accel.range = pointing_settings.accel_range ? pointing_settings.accel_range : 16;
+    resp.accel.min_milli =
+        pointing_settings.accel_min_milli ? pointing_settings.accel_min_milli : 1000;
+    resp.accel.slow_range =
+        pointing_settings.accel_slow_range ? pointing_settings.accel_slow_range : 6;
 
-    LOG_INF("get_accel: enabled=%d max_milli=%u threshold=%u range=%u",
+    LOG_INF("get_accel: enabled=%d max_milli=%u threshold=%u range=%u min_milli=%u slow_range=%u",
             (int)resp.accel.enabled, resp.accel.max_milli, resp.accel.threshold,
-            resp.accel.range);
+            resp.accel.range, resp.accel.min_milli, resp.accel.slow_range);
     return POINTING_RESPONSE(get_accel, resp);
 }
 
@@ -727,6 +794,14 @@ zmk_studio_Response set_accel(const zmk_studio_Request *req) {
         set_req->accel.max_milli ? set_req->accel.max_milli : 2000;
     pointing_settings.accel_threshold = set_req->accel.threshold;
     pointing_settings.accel_range = set_req->accel.range ? set_req->accel.range : 16;
+    /* 0 = field absent (an old Studio client) — keep the current value so
+     * pre-0.6.10 clients don't silently wipe the low-speed precision zone. */
+    if (set_req->accel.min_milli) {
+        pointing_settings.accel_min_milli = set_req->accel.min_milli;
+    }
+    if (set_req->accel.slow_range) {
+        pointing_settings.accel_slow_range = set_req->accel.slow_range;
+    }
 
     /* Apply to running system FIRST (immediate feedback) */
     apply_accel();
