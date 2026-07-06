@@ -140,18 +140,18 @@ static struct {
     .aml_excluded_count = 0,
     .precision_numerator = 1,
     .precision_denominator = 4,
-    // Shipping default = Studio "弱" (weak) preset, so a freshly-flashed or
-    // settings-reset device has gentle acceleration on out of the box. Matches
-    // ACCEL_PRESETS '弱' in Conductor Studio (enabled / 1200 / 10 / 28).
+    // Shipping default (v0.6.10, hardware-tuned 2026-07-06): gentle
+    // acceleration (1.3x from 14 counts/poll over 21) plus a low-speed boost
+    // (1.7x under 7 counts/poll) for a lighter feel on slow movements.
+    // Applies to freshly-flashed or settings-reset devices only — devices
+    // upgrading with a saved blob keep their accel values and get the
+    // low-speed zone OFF (see the migration seeds in pointing_settings_set).
     .accel_enabled = 1,
-    .accel_max_milli = 1200,
-    .accel_threshold = 10,
-    .accel_range = 28,
-    /* TEST BUILD default: gentle low-speed precision zone (0.7x under 6
-     * counts/poll) so it can be felt without Studio UI. Decide the shipping
-     * default before the official 0.6.10 release. */
-    .accel_min_milli = 700,
-    .accel_slow_range = 6,
+    .accel_max_milli = 1300,
+    .accel_threshold = 14,
+    .accel_range = 21,
+    .accel_min_milli = 1700,
+    .accel_slow_range = 7,
 };
 
 /* AML-specific persistent storage */
@@ -194,15 +194,18 @@ static int pointing_settings_set(const char *name, size_t len,
             pointing_settings.scroll_denominator = 1;
             pointing_settings.aml_enabled = 1;
             /* Seed accel defaults too: a blob that predates these fields must
-             * keep the shipping "弱" acceleration instead of the zero-fill
+             * get the factory acceleration instead of the zero-fill
              * (enabled=0) reaching apply_accel() below. Blobs that do contain
-             * them are simply overwritten by read_cb. */
+             * them are simply overwritten by read_cb. The low-speed zone is
+             * deliberately seeded OFF (1000): devices upgrading from an older
+             * blob keep their familiar slow-speed feel — the boost default is
+             * for fresh/reset devices only (user decision 2026-07-06). */
             pointing_settings.accel_enabled = 1;
-            pointing_settings.accel_max_milli = 1200;
-            pointing_settings.accel_threshold = 10;
-            pointing_settings.accel_range = 28;
-            pointing_settings.accel_min_milli = 700;
-            pointing_settings.accel_slow_range = 6;
+            pointing_settings.accel_max_milli = 1300;
+            pointing_settings.accel_threshold = 14;
+            pointing_settings.accel_range = 21;
+            pointing_settings.accel_min_milli = 1000;
+            pointing_settings.accel_slow_range = 7;
             /* Read old data over the defaults */
             int rc = read_cb(cb_arg, &pointing_settings, read_len);
             if (rc >= 0) {
@@ -432,12 +435,11 @@ static void apply_accel(void) {
         pointing_settings.accel_range = 16;
     }
     if (pointing_settings.accel_min_milli == 0) {
-        /* Zero-filled by migration from a pre-0.6.10 blob. TEST BUILD: default
-         * to the gentle low-speed precision zone (see the initializer). */
-        pointing_settings.accel_min_milli = 700;
+        /* Zero = unset (old blob / old client): low-speed zone off. */
+        pointing_settings.accel_min_milli = 1000;
     }
     if (pointing_settings.accel_slow_range == 0) {
-        pointing_settings.accel_slow_range = 6;
+        pointing_settings.accel_slow_range = 7;
     }
 
     /* Clamp to sane bounds; covers both the set_accel RPC path (called before
@@ -665,13 +667,13 @@ static int pointing_settings_reset(void) {
     pointing_settings.cpi = 0;
     pointing_settings.scroll_inverted = 0;
     pointing_settings.aml_enabled = 1;
-    /* Match the shipping "弱" default (see the pointing_settings initializer). */
+    /* Match the shipping default (see the pointing_settings initializer). */
     pointing_settings.accel_enabled = 1;
-    pointing_settings.accel_max_milli = 1200;
-    pointing_settings.accel_threshold = 10;
-    pointing_settings.accel_range = 28;
-    pointing_settings.accel_min_milli = 700;
-    pointing_settings.accel_slow_range = 6;
+    pointing_settings.accel_max_milli = 1300;
+    pointing_settings.accel_threshold = 14;
+    pointing_settings.accel_range = 21;
+    pointing_settings.accel_min_milli = 1700;
+    pointing_settings.accel_slow_range = 7;
 
     /* Apply defaults */
     apply_sensitivity();
@@ -773,7 +775,7 @@ zmk_studio_Response get_accel(const zmk_studio_Request *req) {
     resp.accel.min_milli =
         pointing_settings.accel_min_milli ? pointing_settings.accel_min_milli : 1000;
     resp.accel.slow_range =
-        pointing_settings.accel_slow_range ? pointing_settings.accel_slow_range : 6;
+        pointing_settings.accel_slow_range ? pointing_settings.accel_slow_range : 7;
 
     LOG_INF("get_accel: enabled=%d max_milli=%u threshold=%u range=%u min_milli=%u slow_range=%u",
             (int)resp.accel.enabled, resp.accel.max_milli, resp.accel.threshold,
