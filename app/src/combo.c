@@ -455,28 +455,32 @@ static int position_state_down(const zmk_event_t *ev, struct zmk_position_state_
     update_timeout_task();
 
     if (num_candidates) {
+        /* Scan ALL candidates for the completely-pressed one — the lowest-
+         * indexed candidate is not necessarily it. A short combo overlapping
+         * a lower-indexed longer combo (e.g. {K,-} alongside the zoom
+         * {K,L,-}) would otherwise never be recorded as fully pressed, and
+         * the timeout would replay its keys as plain keystrokes. Complete
+         * candidates have key_position_len == pressed_keys_count, so the
+         * first complete hit is unambiguous; a longer candidate completing
+         * on a later keypress overwrites it in that later scan. */
         for (int i = 0; i < MAX_COMBOS; i++) {
             if (!combos[i].active) {
                 continue;
             }
-            if (sys_bitfield_test_bit((mem_addr_t)&candidates, i)) {
-                const struct combo_cfg *candidate_combo = &combos[i];
-                if (candidate_is_completely_pressed(candidate_combo)) {
-                    fully_pressed_combo = i;
-                    if (num_candidates == 1) {
-                        cleanup();
-                    }
+            if (sys_bitfield_test_bit((mem_addr_t)&candidates, i) &&
+                candidate_is_completely_pressed(&combos[i])) {
+                fully_pressed_combo = i;
+                if (num_candidates == 1) {
+                    cleanup();
                 }
-
-                return ret;
+                break;
             }
         }
+        return ret;
     } else {
         cleanup();
         return ret;
     }
-
-    return -EINVAL;
 }
 
 static int position_state_up(const zmk_event_t *ev, struct zmk_position_state_changed *data) {
