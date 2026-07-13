@@ -27,6 +27,10 @@ extern void zmk_temp_layer_set_motion_threshold(uint16_t threshold);
 extern uint32_t zmk_temp_layer_get_deactivate_timeout(void);
 extern void zmk_temp_layer_set_deactivate_timeout(uint32_t ms);
 
+#if IS_ENABLED(CONFIG_CONDUCTOR_KEY_REPEAT)
+#include <zmk/conductor_key_repeat.h>
+#endif
+
 ZMK_RPC_SUBSYSTEM(pointing)
 
 #define POINTING_RESPONSE(type, ...) ZMK_RPC_RESPONSE(pointing, type, __VA_ARGS__)
@@ -170,6 +174,20 @@ static struct {
     .deactivate_timeout_ms = 0,
 };
 
+#if IS_ENABLED(CONFIG_CONDUCTOR_KEY_REPEAT)
+/* Key auto-repeat persistent storage. delay_ms / interval_ms of 0 select the
+ * firmware default (see zmk_key_repeat_set_config). */
+static struct {
+    uint8_t enabled;
+    uint32_t delay_ms;
+    uint32_t interval_ms;
+} __packed key_repeat_persist = {
+    .enabled = 0,
+    .delay_ms = 0,
+    .interval_ms = 0,
+};
+#endif
+
 /* Forward declaration for the settings handler */
 static int pointing_settings_set(const char *name, size_t len,
                                   settings_read_cb read_cb, void *cb_arg);
@@ -269,6 +287,36 @@ static int pointing_settings_set(const char *name, size_t len,
         }
         return rc;
     }
+#if IS_ENABLED(CONFIG_CONDUCTOR_KEY_REPEAT)
+    if (strcmp(name, "key_repeat") == 0) {
+        if (len != sizeof(key_repeat_persist)) {
+            /* Handle migration: read what we can, zero-fill the rest (0 =
+             * firmware default when applied). */
+            size_t read_len = len < sizeof(key_repeat_persist) ? len : sizeof(key_repeat_persist);
+            memset(&key_repeat_persist, 0, sizeof(key_repeat_persist));
+            int rc = read_cb(cb_arg, &key_repeat_persist, read_len);
+            if (rc >= 0) {
+                LOG_INF("Migrated key_repeat settings from %zu to %zu bytes", len,
+                        sizeof(key_repeat_persist));
+                zmk_key_repeat_set_config(key_repeat_persist.enabled != 0,
+                                          key_repeat_persist.delay_ms,
+                                          key_repeat_persist.interval_ms);
+            }
+            return rc;
+        }
+        int rc = read_cb(cb_arg, &key_repeat_persist, sizeof(key_repeat_persist));
+        if (rc >= 0) {
+            LOG_INF("Loaded key_repeat settings: enabled=%u delay=%u interval=%u",
+                    key_repeat_persist.enabled, key_repeat_persist.delay_ms,
+                    key_repeat_persist.interval_ms);
+            /* Apply immediately — settings_load() runs after SYS_INIT */
+            zmk_key_repeat_set_config(key_repeat_persist.enabled != 0,
+                                      key_repeat_persist.delay_ms,
+                                      key_repeat_persist.interval_ms);
+        }
+        return rc;
+    }
+#endif
     return -ENOENT;
 }
 
@@ -295,6 +343,13 @@ static int aml_settings_save(void) {
     return settings_save_one("pointing/studio/aml",
                               &aml_persist, sizeof(aml_persist));
 }
+
+#if IS_ENABLED(CONFIG_CONDUCTOR_KEY_REPEAT)
+static int key_repeat_settings_save(void) {
+    return settings_save_one("pointing/studio/key_repeat",
+                              &key_repeat_persist, sizeof(key_repeat_persist));
+}
+#endif
 
 void zmk_pointing_toggle_aml(void) {
     bool new_enabled = !zmk_temp_layer_get_aml_enabled();
@@ -518,6 +573,13 @@ static int pointing_studio_init(void) {
             aml_persist.enabled, aml_persist.idle_ms, aml_persist.excluded_count,
             aml_persist.motion_threshold, aml_persist.deactivate_timeout_ms);
 
+#if IS_ENABLED(CONFIG_CONDUCTOR_KEY_REPEAT)
+    /* Apply key-repeat defaults on boot; the settings load (after SYS_INIT)
+     * overrides these with the persisted blob if one exists. */
+    zmk_key_repeat_set_config(key_repeat_persist.enabled != 0, key_repeat_persist.delay_ms,
+                              key_repeat_persist.interval_ms);
+#endif
+
     /* Apply CPI if non-default */
     if (pointing_settings.cursor_denominator > 0 &&
         (pointing_settings.cursor_numerator != 1 ||
@@ -691,6 +753,15 @@ static int pointing_settings_reset(void) {
     aml_persist.deactivate_timeout_ms = 0;
     aml_settings_save();
 
+#if IS_ENABLED(CONFIG_CONDUCTOR_KEY_REPEAT)
+    /* Reset key auto-repeat to shipped defaults (disabled, firmware timings). */
+    key_repeat_persist.enabled = 0;
+    key_repeat_persist.delay_ms = 0;
+    key_repeat_persist.interval_ms = 0;
+    zmk_key_repeat_set_config(false, 0, 0);
+    key_repeat_settings_save();
+#endif
+
     return pointing_settings_save();
 }
 
@@ -826,6 +897,66 @@ zmk_studio_Response set_accel(const zmk_studio_Request *req) {
 
 ZMK_RPC_SUBSYSTEM_HANDLER(pointing, get_accel, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(pointing, set_accel, ZMK_STUDIO_RPC_HANDLER_SECURED);
+
+#if IS_ENABLED(CONFIG_CONDUCTOR_KEY_REPEAT)
+/* ===== Key Auto-Repeat (typematic) RPC Handlers ===== */
+
+zmk_studio_Response get_key_repeat(const zmk_studio_Request *req) {
+    zmk_pointing_GetKeyRepeatResponse resp = zmk_pointing_GetKeyRepeatResponse_init_zero;
+
+    bool enabled = false;
+    uint32_t delay_ms = 0, interval_ms = 0;
+    zmk_key_repeat_get_config(&enabled, &delay_ms, &interval_ms);
+
+    /* has_config must be set for nanopb to serialize the submessage. */
+    resp.has_config = true;
+    resp.config.enabled = enabled;
+    resp.config.delay_ms = delay_ms;
+    resp.config.interval_ms = interval_ms;
+
+    LOG_INF("get_key_repeat: enabled=%d delay=%u interval=%u", (int)enabled, delay_ms, interval_ms);
+    return POINTING_RESPONSE(get_key_repeat, resp);
+}
+
+zmk_studio_Response set_key_repeat(const zmk_studio_Request *req) {
+    const zmk_pointing_SetKeyRepeatRequest *set_req =
+        &req->subsystem.pointing.request_type.set_key_repeat;
+
+    bool enabled = set_req->has_config ? set_req->config.enabled : false;
+    uint32_t delay_ms = set_req->has_config ? set_req->config.delay_ms : 0;
+    uint32_t interval_ms = set_req->has_config ? set_req->config.interval_ms : 0;
+
+    LOG_INF("set_key_repeat: enabled=%d delay=%u interval=%u", (int)enabled, delay_ms, interval_ms);
+
+    /* Apply to running system FIRST (immediate feedback), then read back the
+     * effective clamped values into the persist struct before saving. */
+    zmk_key_repeat_set_config(enabled, delay_ms, interval_ms);
+
+    bool eff_enabled = false;
+    uint32_t eff_delay = 0, eff_interval = 0;
+    zmk_key_repeat_get_config(&eff_enabled, &eff_delay, &eff_interval);
+    key_repeat_persist.enabled = eff_enabled ? 1 : 0;
+    key_repeat_persist.delay_ms = eff_delay;
+    key_repeat_persist.interval_ms = eff_interval;
+
+    int ret = key_repeat_settings_save();
+    if (ret < 0) {
+        LOG_WRN("Failed to save key_repeat settings: %d", ret);
+        zmk_pointing_SetKeyRepeatResponse resp = zmk_pointing_SetKeyRepeatResponse_init_zero;
+        resp.which_result = zmk_pointing_SetKeyRepeatResponse_err_tag;
+        resp.result.err = zmk_pointing_SetSensitivityErrorCode_SET_SENSITIVITY_ERR_STORAGE;
+        return POINTING_RESPONSE(set_key_repeat, resp);
+    }
+
+    zmk_pointing_SetKeyRepeatResponse resp = zmk_pointing_SetKeyRepeatResponse_init_zero;
+    resp.which_result = zmk_pointing_SetKeyRepeatResponse_ok_tag;
+    resp.result.ok = true;
+    return POINTING_RESPONSE(set_key_repeat, resp);
+}
+
+ZMK_RPC_SUBSYSTEM_HANDLER(pointing, set_key_repeat, ZMK_STUDIO_RPC_HANDLER_SECURED);
+ZMK_RPC_SUBSYSTEM_HANDLER(pointing, get_key_repeat, ZMK_STUDIO_RPC_HANDLER_SECURED);
+#endif
 
 /* ===== AML (Auto Mouse Layer) RPC Handlers ===== */
 

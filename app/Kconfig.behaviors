@@ -166,3 +166,31 @@ config CONDUCTOR_GESTURE_PROFILE
       the Studio gesture RPC subsystem and persisted to settings. When disabled,
       or for any direction with no override set, the gesture processor uses the
       shared gesture layer (13) default exactly as before.
+
+config CONDUCTOR_KEY_REPEAT
+    bool "Conductor host-independent key auto-repeat (typematic)"
+    default n
+    help
+      When enabled at runtime (via the Studio pointing RPC), the central
+      synthesizes discrete release/press HID report pairs for the most recently
+      pressed non-modifier keyboard-page key while it is held, after an initial
+      delay and then at a fixed interval. This makes the host see repeated
+      keypresses regardless of its own key-repeat settings (works around macOS
+      press-and-hold suppressing letter repeat). Central-only. Ships disabled;
+      the runtime enable/delay/interval are persisted by the pointing subsystem.
+
+config CONDUCTOR_KEY_REPEAT_DELAY_MS
+    int "Key auto-repeat initial delay (ms)"
+    default 300
+    depends on CONDUCTOR_KEY_REPEAT
+    help
+      Delay from key press to the first synthesized repeat. Used as the default
+      when the persisted/runtime value is 0. Clamped to 100-2000 on apply.
+
+config CONDUCTOR_KEY_REPEAT_INTERVAL_MS
+    int "Key auto-repeat interval (ms)"
+    default 40
+    depends on CONDUCTOR_KEY_REPEAT
+    help
+      Interval between synthesized repeats after the initial delay. Used as the
+      default when the persisted/runtime value is 0. Clamped to 10-200 on apply.
