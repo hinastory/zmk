@@ -759,10 +759,20 @@ static int pointing_settings_reset(void) {
     key_repeat_persist.delay_ms = 0;
     key_repeat_persist.interval_ms = 0;
     zmk_key_repeat_set_config(false, 0, 0);
-    key_repeat_settings_save();
+    int kr_rc = key_repeat_settings_save();
+    if (kr_rc < 0) {
+        LOG_WRN("Failed to persist key_repeat reset: %d", kr_rc);
+    }
 #endif
 
-    return pointing_settings_save();
+    /* Always run the sensitivity save, then surface the first failure. */
+    int rc = pointing_settings_save();
+#if IS_ENABLED(CONFIG_CONDUCTOR_KEY_REPEAT)
+    if (kr_rc < 0) {
+        return kr_rc;
+    }
+#endif
+    return rc;
 }
 
 ZMK_RPC_SUBSYSTEM_SETTINGS_RESET(pointing, pointing_settings_reset);
@@ -922,22 +932,30 @@ zmk_studio_Response set_key_repeat(const zmk_studio_Request *req) {
     const zmk_pointing_SetKeyRepeatRequest *set_req =
         &req->subsystem.pointing.request_type.set_key_repeat;
 
-    bool enabled = set_req->has_config ? set_req->config.enabled : false;
-    uint32_t delay_ms = set_req->has_config ? set_req->config.delay_ms : 0;
-    uint32_t interval_ms = set_req->has_config ? set_req->config.interval_ms : 0;
+    /* Reject a request with no config submessage: applying it would silently
+     * disable key-repeat from a malformed/partial client message. */
+    if (!set_req->has_config) {
+        LOG_WRN("set_key_repeat: missing config, rejecting");
+        zmk_pointing_SetKeyRepeatResponse resp = zmk_pointing_SetKeyRepeatResponse_init_zero;
+        resp.which_result = zmk_pointing_SetKeyRepeatResponse_err_tag;
+        resp.result.err = zmk_pointing_SetSensitivityErrorCode_SET_SENSITIVITY_ERR_INVALID;
+        return POINTING_RESPONSE(set_key_repeat, resp);
+    }
+
+    bool enabled = set_req->config.enabled;
+    uint32_t delay_ms = set_req->config.delay_ms;
+    uint32_t interval_ms = set_req->config.interval_ms;
 
     LOG_INF("set_key_repeat: enabled=%d delay=%u interval=%u", (int)enabled, delay_ms, interval_ms);
 
-    /* Apply to running system FIRST (immediate feedback), then read back the
-     * effective clamped values into the persist struct before saving. */
+    /* Apply to running system FIRST (immediate feedback). The setter clamps
+     * delay/interval, but persist the raw requested values so a stored 0 keeps
+     * meaning "firmware default" and follows future Kconfig default changes. */
     zmk_key_repeat_set_config(enabled, delay_ms, interval_ms);
 
-    bool eff_enabled = false;
-    uint32_t eff_delay = 0, eff_interval = 0;
-    zmk_key_repeat_get_config(&eff_enabled, &eff_delay, &eff_interval);
-    key_repeat_persist.enabled = eff_enabled ? 1 : 0;
-    key_repeat_persist.delay_ms = eff_delay;
-    key_repeat_persist.interval_ms = eff_interval;
+    key_repeat_persist.enabled = set_req->config.enabled ? 1 : 0;
+    key_repeat_persist.delay_ms = set_req->config.delay_ms;
+    key_repeat_persist.interval_ms = set_req->config.interval_ms;
 
     int ret = key_repeat_settings_save();
     if (ret < 0) {

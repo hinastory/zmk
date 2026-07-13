@@ -181,11 +181,15 @@ config CONDUCTOR_KEY_REPEAT
 
 config CONDUCTOR_KEY_REPEAT_DELAY_MS
     int "Key auto-repeat initial delay (ms)"
-    default 300
+    default 200
     depends on CONDUCTOR_KEY_REPEAT
     help
       Delay from key press to the first synthesized repeat. Used as the default
       when the persisted/runtime value is 0. Clamped to 100-2000 on apply.
+      Kept below typical host repeat delays (macOS fastest ~225ms, Windows
+      ~250ms): a first synthetic repeat that fires after the host would have
+      started repeating preempts the host's own repeat — each synthetic release
+      resets the host timer — so double-repeat can't start.
 
 config CONDUCTOR_KEY_REPEAT_INTERVAL_MS
     int "Key auto-repeat interval (ms)"
