@@ -180,6 +180,24 @@ zmk_studio_Response set_tapping_term(const zmk_studio_Request *req) {
     return CORE_RESPONSE(set_tapping_term, true);
 }
 
+zmk_studio_Response get_flavor(const zmk_studio_Request *req) {
+    LOG_DBG("");
+    zmk_core_GetFlavorResponse resp = zmk_core_GetFlavorResponse_init_zero;
+    // Wire encoding: 0 = no override, 1..3 = flavor+1 (internal -1..2).
+    resp.flavor = (uint32_t)(zmk_hold_tap_get_flavor() + 1);
+    return CORE_RESPONSE(get_flavor, resp);
+}
+
+zmk_studio_Response set_flavor(const zmk_studio_Request *req) {
+    LOG_DBG("");
+    uint32_t flavor = req->subsystem.core.request_type.set_flavor.flavor;
+    if (flavor > 3) {
+        return CORE_RESPONSE(set_flavor, false);
+    }
+    zmk_hold_tap_set_flavor((int8_t)flavor - 1);
+    return CORE_RESPONSE(set_flavor, true);
+}
+
 zmk_studio_Response get_os_config(const zmk_studio_Request *req) {
     LOG_DBG("");
     zmk_core_GetOsConfigResponse resp = zmk_core_GetOsConfigResponse_init_zero;
@@ -442,6 +460,8 @@ ZMK_RPC_SUBSYSTEM_HANDLER(core, get_ble_profiles, ZMK_STUDIO_RPC_HANDLER_UNSECUR
 #endif
 ZMK_RPC_SUBSYSTEM_HANDLER(core, get_tapping_term, ZMK_STUDIO_RPC_HANDLER_UNSECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(core, set_tapping_term, ZMK_STUDIO_RPC_HANDLER_SECURED);
+ZMK_RPC_SUBSYSTEM_HANDLER(core, get_flavor, ZMK_STUDIO_RPC_HANDLER_UNSECURED);
+ZMK_RPC_SUBSYSTEM_HANDLER(core, set_flavor, ZMK_STUDIO_RPC_HANDLER_SECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(core, get_os_config, ZMK_STUDIO_RPC_HANDLER_UNSECURED);
 ZMK_RPC_SUBSYSTEM_HANDLER(core, set_os_config, ZMK_STUDIO_RPC_HANDLER_SECURED);
 #if IS_ENABLED(CONFIG_ZMK_BLE)

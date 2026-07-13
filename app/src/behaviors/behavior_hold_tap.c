@@ -25,6 +25,10 @@ LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 // Global tapping-term override. -1 = use per-behavior devicetree default.
 static int32_t tapping_term_override = -1;
 
+// Global hold-tap flavor override. -1 = use per-behavior devicetree default;
+// otherwise a `enum flavor` value (0 = hold-preferred, 1 = balanced, 2 = tap-preferred).
+static int8_t flavor_override = -1;
+
 int zmk_hold_tap_get_tapping_term(void) {
     return tapping_term_override;
 }
@@ -40,6 +44,16 @@ int zmk_hold_tap_get_default_tapping_term(void) {
     return DT_INST_PROP(0, tapping_term_ms);
 }
 
+int8_t zmk_hold_tap_get_flavor(void) {
+    return flavor_override;
+}
+
+void zmk_hold_tap_set_flavor(int8_t flavor) {
+    flavor_override = flavor;
+    LOG_INF("Flavor override set to %d", flavor_override);
+    settings_save_one("hold_tap/flavor", &flavor_override, sizeof(flavor_override));
+}
+
 static int hold_tap_settings_load_cb(const char *name, size_t len,
                                      settings_read_cb read_cb, void *cb_arg) {
     const char *next;
@@ -48,6 +62,17 @@ static int hold_tap_settings_load_cb(const char *name, size_t len,
         int rc = read_cb(cb_arg, &tapping_term_override, sizeof(tapping_term_override));
         if (rc >= 0) {
             LOG_INF("Loaded tapping term override: %d ms", tapping_term_override);
+        }
+        return MIN(rc, 0);
+    }
+    if (settings_name_steq(name, "flavor", &next) && !next) {
+        if (len != sizeof(flavor_override)) return -EINVAL;
+        int rc = read_cb(cb_arg, &flavor_override, sizeof(flavor_override));
+        if (rc >= 0) {
+            if (flavor_override < -1 || flavor_override > 2) {
+                flavor_override = -1;
+            }
+            LOG_INF("Loaded flavor override: %d", flavor_override);
         }
         return MIN(rc, 0);
     }
@@ -105,6 +130,10 @@ struct behavior_hold_tap_config {
 
 static inline int32_t effective_tapping_term(const struct behavior_hold_tap_config *cfg) {
     return (tapping_term_override >= 0) ? tapping_term_override : cfg->tapping_term_ms;
+}
+
+static inline enum flavor effective_flavor(const struct behavior_hold_tap_config *cfg) {
+    return (flavor_override >= 0) ? (enum flavor)flavor_override : (enum flavor)cfg->flavor;
 }
 
 struct behavior_hold_tap_data {
@@ -583,7 +612,7 @@ static void decide_hold_tap(struct active_hold_tap *hold_tap,
     }
 
     // If the hold-tap behavior is still undecided, attempt to decide it.
-    switch (hold_tap->config->flavor) {
+    switch (effective_flavor(hold_tap->config)) {
     case FLAVOR_HOLD_PREFERRED:
         decide_hold_preferred(hold_tap, decision_moment);
         break;
@@ -607,7 +636,7 @@ static void decide_hold_tap(struct active_hold_tap *hold_tap,
     // Since the hold-tap has been decided, clean up undecided_hold_tap and
     // execute the decided behavior.
     LOG_DBG("%d decided %s (%s decision moment %s)", hold_tap->position,
-            status_str(hold_tap->status), flavor_str(hold_tap->config->flavor),
+            status_str(hold_tap->status), flavor_str(effective_flavor(hold_tap->config)),
             decision_moment_str(decision_moment));
     undecided_hold_tap = NULL;
     press_binding(hold_tap);

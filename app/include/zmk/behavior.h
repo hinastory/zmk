@@ -82,3 +82,8 @@ const char *zmk_behavior_find_behavior_name_from_local_id(zmk_behavior_local_id_
 int zmk_hold_tap_get_tapping_term(void);
 void zmk_hold_tap_set_tapping_term(int32_t ms);
 int zmk_hold_tap_get_default_tapping_term(void);
+
+// Runtime hold-tap flavor override (set via ZMK Studio RPC).
+// -1 = no override; otherwise 0 = hold-preferred, 1 = balanced, 2 = tap-preferred.
+int8_t zmk_hold_tap_get_flavor(void);
+void zmk_hold_tap_set_flavor(int8_t flavor);
