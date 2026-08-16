@@ -180,16 +180,25 @@ int release_peripheral_slot(int index) {
 
     struct peripheral_slot *slot = &peripherals[index];
 
+    // Drop the connection reference before the already-open check below, not
+    // after it. A slot can end up open while still holding a conn - notably via
+    // reserve_peripheral_slot(), whose "be sure the slot is fully reinitialized"
+    // call lands here in exactly that state and used to return without clearing
+    // anything, after which bt_conn_le_create() overwrites the pointer and leaks
+    // the old reference. A stale conn left here is not just a leak: it makes the
+    // peripheral look permanently connected to the scan check, so the central
+    // stops looking for the half and it can never rejoin.
+    if (slot->conn != NULL) {
+        bt_conn_unref(slot->conn);
+        slot->conn = NULL;
+    }
+
     if (slot->state == PERIPHERAL_SLOT_STATE_OPEN) {
         return -EINVAL;
     }
 
     LOG_DBG("Releasing peripheral slot at %d", index);
 
-    if (slot->conn != NULL) {
-        bt_conn_unref(slot->conn);
-        slot->conn = NULL;
-    }
     slot->state = PERIPHERAL_SLOT_STATE_OPEN;
 
     // Raise events releasing any active positions from this peripheral
@@ -912,10 +921,14 @@ static int start_scanning(void) {
         return 0;
     }
 
-    // If all the devices are connected, there is no need to scan.
+    // If all the devices are connected, there is no need to scan. Judge that by
+    // slot state rather than by conn being non-NULL: the pointer only says a
+    // connection object was created, and a slot that failed to release still
+    // holds one, which would silently suppress scanning forever. An open slot is
+    // one nothing is connected to or connecting for, so it is what we scan for.
     bool has_unconnected = false;
     for (int i = 0; i < CONFIG_ZMK_SPLIT_BLE_CENTRAL_PERIPHERALS; i++) {
-        if (peripherals[i].conn == NULL) {
+        if (peripherals[i].state == PERIPHERAL_SLOT_STATE_OPEN) {
             has_unconnected = true;
             break;
         }
