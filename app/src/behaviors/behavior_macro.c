@@ -5,11 +5,13 @@
  */
 
 #include <zephyr/device.h>
+#include <string.h>
 #include <drivers/behavior.h>
 #include <zephyr/logging/log.h>
 #include <zmk/behavior.h>
 #include <zmk/behavior_queue.h>
 #include <zmk/keymap.h>
+#include <zmk/behavior_macro.h>
 
 LOG_MODULE_DECLARE(zmk, CONFIG_ZMK_LOG_LEVEL);
 
@@ -111,7 +113,12 @@ static bool handle_control_binding(struct behavior_macro_trigger_state *state,
     return true;
 }
 
-static int behavior_macro_init(const struct device *dev) {
+/*
+ * Recompute the press/release split from the binding list. Split out of init
+ * so a macro whose bindings are rewritten at runtime (Studio's macros
+ * subsystem) can refresh it without going through device init again.
+ */
+static void behavior_macro_recalc(const struct device *dev) {
     const struct behavior_macro_config *cfg = dev->config;
     struct behavior_macro_state *state = dev->data;
     state->press_bindings_count = cfg->count;
@@ -134,9 +141,55 @@ static int behavior_macro_init(const struct device *dev) {
             state->release_state.param2_source = PARAM_SOURCE_BINDING;
         }
     }
+}
 
+static int behavior_macro_init(const struct device *dev) {
+    behavior_macro_recalc(dev);
     return 0;
-};
+}
+
+int zmk_behavior_macro_get_bindings(const struct device *dev,
+                                    const struct zmk_behavior_binding **bindings) {
+    if (!dev || !dev->config) {
+        return -EINVAL;
+    }
+    const struct behavior_macro_config *cfg = dev->config;
+    *bindings = cfg->bindings;
+    return cfg->count;
+}
+
+int zmk_behavior_macro_get_defaults(const struct device *dev, uint32_t *wait_ms, uint32_t *tap_ms) {
+    if (!dev || !dev->config) {
+        return -EINVAL;
+    }
+    const struct behavior_macro_config *cfg = dev->config;
+    if (wait_ms) {
+        *wait_ms = cfg->default_wait_ms;
+    }
+    if (tap_ms) {
+        *tap_ms = cfg->default_tap_ms;
+    }
+    return 0;
+}
+
+// Writable because MACRO_INST declares the config as a plain `static struct`,
+// unlike every other behaviour here, which uses `static const`. It therefore
+// lives in .data and can be rewritten. The cast is what makes that explicit;
+// should the declaration ever gain a const, this stops compiling rather than
+// silently writing to flash-backed memory.
+int zmk_behavior_macro_set_bindings(const struct device *dev,
+                                    const struct zmk_behavior_binding *bindings, size_t count) {
+    if (!dev || !dev->config || !bindings) {
+        return -EINVAL;
+    }
+    struct behavior_macro_config *cfg = (struct behavior_macro_config *)dev->config;
+
+    memcpy(cfg->bindings, bindings, count * sizeof(struct zmk_behavior_binding));
+    cfg->count = count;
+
+    behavior_macro_recalc(dev);
+    return 0;
+}
 
 static uint32_t select_param(enum param_source param_source, uint32_t source_binding,
                              const struct zmk_behavior_binding *macro_binding) {
