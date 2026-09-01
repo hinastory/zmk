@@ -59,6 +59,13 @@ struct macro_slot {
     const struct device *dev;
     uint32_t capacity; /* bindings[] entries the keymap allocated */
     bool editable;     /* named m_dyn_* */
+    /* The behaviour local id, which is what a keymap binding stores and what
+     * list_all_behaviors reports. Macros are addressed by it rather than by
+     * position in this table: the editor takes the id from list_all_macros and
+     * writes it straight into a key binding, so anything else would bind the
+     * wrong behaviour. Resolved at init, since it comes from a linker section
+     * that is not populated at static-init time. */
+    zmk_behavior_local_id_t behavior_id;
 };
 
 #define MACRO_NODE_ENTRY(node)                                                                     \
@@ -72,6 +79,15 @@ struct macro_slot {
 static struct macro_slot slots[] = {DT_FOREACH_STATUS_OKAY(zmk_behavior_macro, MACRO_NODE_ENTRY)};
 
 #define SLOT_COUNT ARRAY_SIZE(slots)
+
+static int slot_index_for_behavior(uint32_t behavior_id) {
+    for (size_t i = 0; i < SLOT_COUNT; i++) {
+        if (slots[i].behavior_id == behavior_id) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
 
 /* Persisted form: the wire steps, not the encoded bindings. Compact, and it
  * survives a change to the encoder. */
@@ -356,7 +372,7 @@ zmk_studio_Response list_all_macros(const zmk_studio_Request *req) {
         const struct zmk_behavior_binding *bindings = NULL;
         int binding_count = zmk_behavior_macro_get_bindings(slots[i].dev, &bindings);
         zmk_macros_MacroSummary *m = &resp.macros[resp.macros_count++];
-        m->id = i;
+        m->id = slots[i].behavior_id;
         strncpy(m->name, slots[i].name, sizeof(m->name) - 1);
         m->name[sizeof(m->name) - 1] = '\0';
         m->step_count = slots[i].editable ? stored[i].step_count : MAX(binding_count, 0);
@@ -368,8 +384,9 @@ zmk_studio_Response list_all_macros(const zmk_studio_Request *req) {
 zmk_studio_Response get_macro_data(const zmk_studio_Request *req) {
     uint32_t id = req->subsystem.macros.request_type.get_macro_data.macro_id;
     zmk_macros_GetMacroDataResponse resp = zmk_macros_GetMacroDataResponse_init_zero;
+    int slot = slot_index_for_behavior(id);
 
-    if (id >= SLOT_COUNT) {
+    if (slot < 0) {
         resp.which_result = zmk_macros_GetMacroDataResponse_err_tag;
         resp.result.err = zmk_macros_GetMacroDataErrorCode_GET_MACRO_DATA_ERR_INVALID_ID;
         return MACROS_RESPONSE(get_macro_data, resp);
@@ -377,22 +394,22 @@ zmk_studio_Response get_macro_data(const zmk_studio_Request *req) {
 
     resp.which_result = zmk_macros_GetMacroDataResponse_macro_tag;
     resp.result.macro.id = id;
-    strncpy(resp.result.macro.name, slots[id].name, sizeof(resp.result.macro.name) - 1);
-    resp.result.macro.steps_count =
-        decode_bindings(slots[id].dev, resp.result.macro.steps, ARRAY_SIZE(resp.result.macro.steps));
+    strncpy(resp.result.macro.name, slots[slot].name, sizeof(resp.result.macro.name) - 1);
+    resp.result.macro.steps_count = decode_bindings(slots[slot].dev, resp.result.macro.steps,
+                                                    ARRAY_SIZE(resp.result.macro.steps));
 
     return MACROS_RESPONSE(get_macro_data, resp);
 }
 
 zmk_studio_Response set_macro(const zmk_studio_Request *req) {
     const zmk_macros_MacroSequence *macro = &req->subsystem.macros.request_type.set_macro.macro;
-    uint32_t id = macro->id;
+    int id = slot_index_for_behavior(macro->id);
 
-    if (id >= SLOT_COUNT) {
+    if (id < 0) {
         return MACROS_RESPONSE(set_macro, zmk_macros_SetMacroResponse_SET_MACRO_RESP_ERR_INVALID_ID);
     }
     if (!slots[id].editable) {
-        LOG_WRN("macro %u (%s) is declared in the keymap, not an editable slot", id, slots[id].name);
+        LOG_WRN("macro %s is declared in the keymap, not an editable slot", slots[id].name);
         return MACROS_RESPONSE(set_macro, zmk_macros_SetMacroResponse_SET_MACRO_RESP_ERR_INVALID_ID);
     }
     if (macro->steps_count > MAX_STORED_STEPS) {
@@ -427,11 +444,11 @@ zmk_studio_Response set_macro(const zmk_studio_Request *req) {
 
     ret = macros_settings_save();
     if (ret < 0) {
-        LOG_ERR("failed to persist macro %u: %d", id, ret);
+        LOG_ERR("failed to persist macro %s: %d", slots[id].name, ret);
         return MACROS_RESPONSE(set_macro, zmk_macros_SetMacroResponse_SET_MACRO_RESP_ERR_GENERIC);
     }
 
-    LOG_DBG("macro %u (%s): %u steps -> %u bindings", id, slots[id].name, macro->steps_count, len);
+    LOG_DBG("macro %s: %u steps -> %u bindings", slots[id].name, macro->steps_count, len);
     return MACROS_RESPONSE(set_macro, zmk_macros_SetMacroResponse_SET_MACRO_RESP_OK);
 }
 
@@ -490,7 +507,9 @@ ZMK_RPC_SUBSYSTEM_SETTINGS_RESET(macros, macros_settings_reset);
 static int macros_subsystem_init(void) {
     for (size_t i = 0; i < SLOT_COUNT; i++) {
         slots[i].editable = strncmp(slots[i].name, "m_dyn_", 6) == 0;
-        LOG_DBG("macro slot %zu: %s, %u bindings, %s", i, slots[i].name, slots[i].capacity,
+        slots[i].behavior_id = zmk_behavior_get_local_id(slots[i].dev->name);
+        LOG_DBG("macro slot %zu: %s, behavior id %u, %u bindings, %s", i, slots[i].name,
+                slots[i].behavior_id, slots[i].capacity,
                 slots[i].editable ? "editable" : "from keymap");
     }
     return 0;
