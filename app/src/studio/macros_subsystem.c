@@ -59,13 +59,6 @@ struct macro_slot {
     const struct device *dev;
     uint32_t capacity; /* bindings[] entries the keymap allocated */
     bool editable;     /* named m_dyn_* */
-    /* The behaviour local id, which is what a keymap binding stores and what
-     * list_all_behaviors reports. Macros are addressed by it rather than by
-     * position in this table: the editor takes the id from list_all_macros and
-     * writes it straight into a key binding, so anything else would bind the
-     * wrong behaviour. Resolved at init, since it comes from a linker section
-     * that is not populated at static-init time. */
-    zmk_behavior_local_id_t behavior_id;
 };
 
 #define MACRO_NODE_ENTRY(node)                                                                     \
@@ -80,9 +73,24 @@ static struct macro_slot slots[] = {DT_FOREACH_STATUS_OKAY(zmk_behavior_macro, M
 
 #define SLOT_COUNT ARRAY_SIZE(slots)
 
+/*
+ * Macros are addressed by behaviour local id, not by position in this table:
+ * the editor takes the id from list_all_macros and writes it straight into a
+ * key binding, so anything else binds the wrong behaviour.
+ *
+ * Resolved on every call rather than cached at init. Local ids start out as a
+ * crc16 of the device name and are then reassigned from settings while
+ * settings_load runs (behavior.c), so an id read during SYS_INIT is not the
+ * one list_all_behaviors will report. Any RPC arrives long after that has
+ * settled, and the lookup is a handful of string compares.
+ */
+static zmk_behavior_local_id_t slot_behavior_id(size_t index) {
+    return zmk_behavior_get_local_id(slots[index].dev->name);
+}
+
 static int slot_index_for_behavior(uint32_t behavior_id) {
     for (size_t i = 0; i < SLOT_COUNT; i++) {
-        if (slots[i].behavior_id == behavior_id) {
+        if (slot_behavior_id(i) == behavior_id) {
             return (int)i;
         }
     }
@@ -372,7 +380,7 @@ zmk_studio_Response list_all_macros(const zmk_studio_Request *req) {
         const struct zmk_behavior_binding *bindings = NULL;
         int binding_count = zmk_behavior_macro_get_bindings(slots[i].dev, &bindings);
         zmk_macros_MacroSummary *m = &resp.macros[resp.macros_count++];
-        m->id = slots[i].behavior_id;
+        m->id = slot_behavior_id(i);
         strncpy(m->name, slots[i].name, sizeof(m->name) - 1);
         m->name[sizeof(m->name) - 1] = '\0';
         m->step_count = slots[i].editable ? stored[i].step_count : MAX(binding_count, 0);
@@ -507,9 +515,8 @@ ZMK_RPC_SUBSYSTEM_SETTINGS_RESET(macros, macros_settings_reset);
 static int macros_subsystem_init(void) {
     for (size_t i = 0; i < SLOT_COUNT; i++) {
         slots[i].editable = strncmp(slots[i].name, "m_dyn_", 6) == 0;
-        slots[i].behavior_id = zmk_behavior_get_local_id(slots[i].dev->name);
-        LOG_DBG("macro slot %zu: %s, behavior id %u, %u bindings, %s", i, slots[i].name,
-                slots[i].behavior_id, slots[i].capacity,
+        LOG_DBG("macro slot %zu: %s (device %s), %u bindings, %s", i, slots[i].name,
+                slots[i].dev->name, slots[i].capacity,
                 slots[i].editable ? "editable" : "from keymap");
     }
     return 0;
