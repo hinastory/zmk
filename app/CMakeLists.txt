@@ -133,6 +133,7 @@ if (CONFIG_ZMK_STUDIO_RPC)
                         ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}/proto/zmk/pointing.proto
                         ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}/proto/zmk/combo.proto
                         ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}/proto/zmk/gesture.proto
+                        ${ZEPHYR_ZMK_STUDIO_MESSAGES_MODULE_DIR}/proto/zmk/macros.proto
   )
 
   target_include_directories(app PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
