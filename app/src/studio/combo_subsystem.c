@@ -40,6 +40,20 @@ struct combo_storage_entry {
 #define MAX_STORED_COMBOS CONFIG_ZMK_COMBO_MAX_DYNAMIC_COMBOS
 
 static struct combo_storage_entry stored_combos[MAX_STORED_COMBOS];
+
+/*
+ * Display names, kept in their own blob rather than inside
+ * combo_storage_entry. Widening that struct would change sizeof(stored_combos)
+ * and the loader below rejects a size mismatch, which would silently discard
+ * every combo already on the keyboard. Kept apart, a keyboard written by an
+ * older build simply has no names entry and every combo keeps reporting an
+ * empty name, exactly as before.
+ *
+ * Sized to match zmk.combo.ComboConfig.name (max_size:24 in combo.options).
+ */
+#define COMBO_NAME_MAX 24
+
+static char stored_combo_names[MAX_STORED_COMBOS][COMBO_NAME_MAX];
 static int stored_combo_count = 0;
 static bool combos_loaded_from_settings = false;
 /* One-time decode-bug heal marker (see apply_stored_combos). Loaded from
@@ -126,6 +140,17 @@ static int combo_settings_set(const char *name, size_t len,
         }
         return rc;
     }
+    if (strcmp(name, "names") == 0) {
+        /* Absent on a keyboard written by an older build: the names stay empty
+         * and every combo reports no name, which is what it did before. */
+        if (len != sizeof(stored_combo_names)) {
+            LOG_WRN("Combo name settings size mismatch: expected %d, got %d — ignoring",
+                    (int)sizeof(stored_combo_names), (int)len);
+            return 0;
+        }
+        int rc = read_cb(cb_arg, &stored_combo_names, sizeof(stored_combo_names));
+        return rc >= 0 ? 0 : rc;
+    }
     if (strcmp(name, "heal1") == 0) {
         uint8_t done = 0;
         if (read_cb(cb_arg, &done, sizeof(done)) >= 0 && done) {
@@ -137,8 +162,13 @@ static int combo_settings_set(const char *name, size_t len,
 }
 
 static int combo_settings_save(void) {
-    return settings_save_one("combo/studio/combos",
-                              &stored_combos, sizeof(stored_combos));
+    int ret = settings_save_one("combo/studio/combos",
+                                &stored_combos, sizeof(stored_combos));
+    if (ret < 0) {
+        return ret;
+    }
+    return settings_save_one("combo/studio/names",
+                             &stored_combo_names, sizeof(stored_combo_names));
 }
 
 /*
@@ -325,6 +355,10 @@ zmk_studio_Response get_combos(const zmk_studio_Request *req) {
         combo_msg->require_prior_idle_ms = cfg.require_prior_idle_ms;
         combo_msg->layer_mask = cfg.layer_mask;
         combo_msg->slow_release = cfg.slow_release;
+        if (i < MAX_STORED_COMBOS) {
+            strncpy(combo_msg->name, stored_combo_names[i], sizeof(combo_msg->name) - 1);
+            combo_msg->name[sizeof(combo_msg->name) - 1] = '\0';
+        }
 
         resp.combos_count++;
     }
@@ -398,6 +432,12 @@ zmk_studio_Response set_combo(const zmk_studio_Request *req) {
 
     /* Snapshot and save */
     snapshot_combos_to_storage();
+    /* The snapshot walks the runtime combos in order, so its indices line up
+     * with the ones the RPC uses. */
+    if (index < MAX_STORED_COMBOS) {
+        strncpy(stored_combo_names[index], set_req->combo.name, COMBO_NAME_MAX - 1);
+        stored_combo_names[index][COMBO_NAME_MAX - 1] = '\0';
+    }
     ret = combo_settings_save();
     if (ret < 0) {
         LOG_WRN("set_combo: failed to save: %d", ret);
@@ -465,6 +505,10 @@ zmk_studio_Response add_combo(const zmk_studio_Request *req) {
 
     /* Snapshot and save */
     snapshot_combos_to_storage();
+    if (ret >= 0 && ret < MAX_STORED_COMBOS) {
+        strncpy(stored_combo_names[ret], add_req->combo.name, COMBO_NAME_MAX - 1);
+        stored_combo_names[ret][COMBO_NAME_MAX - 1] = '\0';
+    }
     int save_ret = combo_settings_save();
     if (save_ret < 0) {
         LOG_WRN("add_combo: failed to save: %d", save_ret);
@@ -500,6 +544,10 @@ zmk_studio_Response remove_combo(const zmk_studio_Request *req) {
     }
 
     /* Snapshot and save */
+    for (int i = index; i + 1 < MAX_STORED_COMBOS; i++) {
+        memcpy(stored_combo_names[i], stored_combo_names[i + 1], COMBO_NAME_MAX);
+    }
+    memset(stored_combo_names[MAX_STORED_COMBOS - 1], 0, COMBO_NAME_MAX);
     snapshot_combos_to_storage();
     ret = combo_settings_save();
     if (ret < 0) {
