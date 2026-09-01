@@ -120,9 +120,28 @@ struct stored_macro {
 static struct stored_macro stored[SLOT_COUNT];
 
 #define SETTINGS_KEY "macros/studio/slots"
+#define NAMES_SETTINGS_KEY "macros/studio/names"
+
+/*
+ * User-assigned names, kept in a separate blob from the steps on purpose.
+ * Folding them into struct stored_macro would change sizeof(stored), and the
+ * loader below rejects a size mismatch -- which would have silently discarded
+ * every macro already on the keyboard. Empty means "no name given", and
+ * list_all_macros falls back to the devicetree node name.
+ *
+ * Sized to match zmk.macros.MacroSequence.name (max_size:24 in
+ * macros.options), so a name that survives the wire also survives storage.
+ */
+#define MACRO_NAME_MAX 24
+
+static char stored_names[SLOT_COUNT][MACRO_NAME_MAX];
 
 static int macros_settings_save(void) {
-    return settings_save_one(SETTINGS_KEY, &stored, sizeof(stored));
+    int ret = settings_save_one(SETTINGS_KEY, &stored, sizeof(stored));
+    if (ret < 0) {
+        return ret;
+    }
+    return settings_save_one(NAMES_SETTINGS_KEY, &stored_names, sizeof(stored_names));
 }
 
 /* ---- steps -> bindings ------------------------------------------------- */
@@ -381,7 +400,8 @@ zmk_studio_Response list_all_macros(const zmk_studio_Request *req) {
         int binding_count = zmk_behavior_macro_get_bindings(slots[i].dev, &bindings);
         zmk_macros_MacroSummary *m = &resp.macros[resp.macros_count++];
         m->id = slot_behavior_id(i);
-        strncpy(m->name, slots[i].name, sizeof(m->name) - 1);
+        const char *label = stored_names[i][0] ? stored_names[i] : slots[i].name;
+        strncpy(m->name, label, sizeof(m->name) - 1);
         m->name[sizeof(m->name) - 1] = '\0';
         m->step_count = slots[i].editable ? stored[i].step_count : MAX(binding_count, 0);
     }
@@ -402,7 +422,8 @@ zmk_studio_Response get_macro_data(const zmk_studio_Request *req) {
 
     resp.which_result = zmk_macros_GetMacroDataResponse_macro_tag;
     resp.result.macro.id = id;
-    strncpy(resp.result.macro.name, slots[slot].name, sizeof(resp.result.macro.name) - 1);
+    const char *label = stored_names[slot][0] ? stored_names[slot] : slots[slot].name;
+    strncpy(resp.result.macro.name, label, sizeof(resp.result.macro.name) - 1);
     resp.result.macro.steps_count = decode_bindings(slots[slot].dev, resp.result.macro.steps,
                                                     ARRAY_SIZE(resp.result.macro.steps));
 
@@ -440,6 +461,8 @@ zmk_studio_Response set_macro(const zmk_studio_Request *req) {
 
     stored[id].used = 1;
     stored[id].step_count = macro->steps_count;
+    strncpy(stored_names[id], macro->name, MACRO_NAME_MAX - 1);
+    stored_names[id][MACRO_NAME_MAX - 1] = '\0';
     for (uint32_t i = 0; i < macro->steps_count; i++) {
         stored[id].steps[i].action = macro->steps[i].action_type;
         stored[id].steps[i].value = macro->steps[i].value;
@@ -479,6 +502,17 @@ static int macros_settings_set(const char *name, size_t len, settings_read_cb re
         int rc = read_cb(cb_arg, &stored, sizeof(stored));
         return rc >= 0 ? 0 : rc;
     }
+    if (settings_name_steq(name, "names", NULL)) {
+        /* Absent on a keyboard written by an older build: leave the names
+         * empty and every macro keeps reporting its node name. */
+        if (len != sizeof(stored_names)) {
+            LOG_WRN("stored macro names are %zu bytes, expected %zu -- ignoring", len,
+                    sizeof(stored_names));
+            return 0;
+        }
+        int rc = read_cb(cb_arg, &stored_names, sizeof(stored_names));
+        return rc >= 0 ? 0 : rc;
+    }
     return -ENOENT;
 }
 
@@ -500,6 +534,7 @@ SETTINGS_STATIC_HANDLER_DEFINE(macros_studio, "macros/studio", NULL, macros_sett
 
 static int macros_settings_reset(void) {
     memset(&stored, 0, sizeof(stored));
+    memset(&stored_names, 0, sizeof(stored_names));
     for (size_t i = 0; i < SLOT_COUNT; i++) {
         if (slots[i].editable) {
             apply_slot(i);
