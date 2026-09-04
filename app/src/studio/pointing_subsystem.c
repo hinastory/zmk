@@ -174,6 +174,15 @@ static struct {
     .deactivate_timeout_ms = 0,
 };
 
+/* Whether a saved AML record was actually read back from flash. An empty
+ * excluded-positions list is a legitimate saved value -- it is what the user
+ * gets after clearing every exclusion in Studio -- so the count alone cannot
+ * distinguish "cleared" from "never saved". Without this flag the restore
+ * below skipped set_config() for a cleared list, has_runtime_config stayed
+ * false, and zmk_temp_layer_get_config() fell back to the devicetree
+ * excluded-positions, which reappeared on the next boot. */
+static bool aml_settings_loaded = false;
+
 #if IS_ENABLED(CONFIG_CONDUCTOR_KEY_REPEAT)
 /* Key auto-repeat persistent storage. delay_ms / interval_ms of 0 select the
  * firmware default (see zmk_key_repeat_set_config). */
@@ -270,13 +279,15 @@ static int pointing_settings_set(const char *name, size_t len,
                     aml_persist.motion_threshold, aml_persist.deactivate_timeout_ms);
             /* Apply immediately — settings_load() runs after SYS_INIT */
             zmk_temp_layer_set_aml_enabled(aml_persist.enabled != 0);
-            if (aml_persist.excluded_count > 0) {
-                uint32_t positions[AML_SETTINGS_MAX_EXCLUDED];
-                for (size_t i = 0; i < aml_persist.excluded_count; i++) {
-                    positions[i] = aml_persist.excluded_positions[i];
-                }
-                zmk_temp_layer_set_config(aml_persist.idle_ms, positions, aml_persist.excluded_count);
+            aml_settings_loaded = true;
+            /* Unconditional: we are inside the successful-read branch, so a
+             * zero count means the list was saved empty, and set_config() must
+             * still run to take the runtime override. */
+            uint32_t positions[AML_SETTINGS_MAX_EXCLUDED];
+            for (size_t i = 0; i < aml_persist.excluded_count; i++) {
+                positions[i] = aml_persist.excluded_positions[i];
             }
+            zmk_temp_layer_set_config(aml_persist.idle_ms, positions, aml_persist.excluded_count);
             if (aml_persist.motion_threshold > 0) {
                 zmk_temp_layer_set_motion_threshold(aml_persist.motion_threshold);
             }
@@ -556,7 +567,10 @@ static int pointing_studio_init(void) {
 
     /* Restore AML from dedicated aml_persist storage */
     zmk_temp_layer_set_aml_enabled(aml_persist.enabled != 0);
-    if (aml_persist.excluded_count > 0) {
+    /* Gate on the record existing rather than on the count: a saved empty list
+     * must be applied, while a board that has never been configured has to keep
+     * its devicetree excluded-positions. */
+    if (aml_settings_loaded) {
         uint32_t positions[AML_SETTINGS_MAX_EXCLUDED];
         for (size_t i = 0; i < aml_persist.excluded_count; i++) {
             positions[i] = aml_persist.excluded_positions[i];
